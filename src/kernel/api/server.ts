@@ -275,6 +275,23 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
         }
         return;
       }
+      if (b === 'protocol' && req.method === 'POST') {
+        // 换协议端（设置页那颗胶囊）：先停旧端再落盘 flavor，绝不让两档同时挂着；
+        // 新端后台起——首次用某档要先下发行包，不能把 HTTP 请求挂在那儿，设置页轮询状态。
+        const f = String((body as { flavor?: unknown })?.flavor ?? '');
+        if (f !== 'snowluma' && f !== 'llbot' && f !== 'napcat') return send({ error: '未知协议端' }, 400);
+        if (f !== kernel.config.config.onebot.flavor) {
+          await kernel.protocolEnd().stop().catch(() => {});
+          kernel.config.config.onebot.flavor = f;
+          kernel.config.saveConfig();
+          if (kernel.managesEnd()) {
+            void kernel.protocolEnd().start().catch((e) => {
+              kernel.errors.record('error', 'adapter', `${f} 托管启动失败: ${(e as Error).message}`, { notifyOwner: true });
+            });
+          }
+        }
+        return send({ ok: true, protocol: kernel.config.config.onebot.flavor });
+      }
       if (b === 'end' && c === 'restart' && req.method === 'POST') {
         const end = kernel.protocolEnd();
         await end.stop();
@@ -1132,7 +1149,7 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
         for (const section of ['onebot', 'persona'] as const) {
           if (body[section] && typeof body[section] === 'object') {
             // onebot.llbot / onebot.napcat / onebot.snowluma 嵌套合并，避免浅覆盖丢字段；
-            // flavor（协议端）不走这里——换端只认 config.json 手改（重启内核生效），API/界面都没有切换入口
+            // flavor 不走这里：换端只认 POST /api/login/protocol（停旧端→落盘→起新端），防旧页面把它当普通键写回
             if (section === 'onebot') {
               const { llbot, napcat, snowluma, flavor, ...rest } = body.onebot;
               Object.assign(cfg.onebot, rest);

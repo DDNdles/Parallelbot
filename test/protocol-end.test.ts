@@ -199,7 +199,7 @@ test('登录判定看协议端自报的在线，不看反向 WS：QQ 退了 WS �
   }
 });
 
-test('API：换端入口已删（flavor 只认 config.json 手改）；检测逐项返回；子块只收白名单', async () => {
+test('API：换端入口（设置页胶囊）：切换落盘并停旧起新；检测逐项返回；子块只收白名单', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'parallel-flavor-api-'));
   const kernel = new Kernel({ dataDir, noApi: true });
   const onebot = ANY(kernel.config.config.onebot);
@@ -216,11 +216,21 @@ test('API：换端入口已删（flavor 只认 config.json 手改）；检测逐
   };
   try {
     assert.equal((await get('/api/login/status')).protocol, 'snowluma');
-    // 换端入口已删：API 不提供切换，config API 也不收 flavor（换端只认 config.json 手改，重启生效）
-    assert.equal((await post('/api/login/protocol', { flavor: 'napcat' })).status, 404);
-    await post('/api/config', { onebot: { flavor: 'napcat' } });
-    assert.equal((await get('/api/login/status')).protocol, 'snowluma', 'config API 不收 flavor');
-    assert.equal(ANY(ANY(JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf-8'))).onebot).flavor, 'snowluma', 'config API 不落盘换端');
+    // 换端入口回归（设置页）：停旧端→落盘→（托管内核）起新端；未知档拒绝；noApi 不该触发下载
+    assert.equal((await post('/api/login/protocol', { flavor: 'bogus' })).status, 400);
+    const sw = await post('/api/login/protocol', { flavor: 'napcat' });
+    assert.equal(sw.status, 200);
+    assert.equal(sw.body.protocol, 'napcat');
+    assert.equal(kernel.protocolEnd().id, 'napcat');
+    assert.equal(kernel.napcat.downloaded(), false, 'noApi 内核不托管：换端不该触发下载');
+    assert.equal(ANY(ANY(JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf-8'))).onebot).flavor, 'napcat', '换端要落盘');
+    // config API 依旧不收 flavor（防旧页面把它当普通键写回；换端只走 protocol 路由）
+    await post('/api/config', { onebot: { flavor: 'llbot' } });
+    assert.equal((await get('/api/login/status')).protocol, 'napcat', 'config API 不收 flavor');
+    // 同值切换是无操作
+    const same = await post('/api/login/protocol', { flavor: 'napcat' });
+    assert.equal(same.status, 200);
+    assert.equal(same.body.protocol, 'napcat');
 
     // 与手改 config.json 等价：flavor 被改后（启动读取或手改内存），状态如实反映当前协议端
     ANY(kernel.config.config.onebot).flavor = 'napcat';

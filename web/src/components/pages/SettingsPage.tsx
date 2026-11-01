@@ -62,8 +62,8 @@ interface Work {
 
 interface Config {
   risk: { replyRatePerMin: number; proactive: Record<string, boolean> };
-  /** flavor（协议端）与 llbot.mode（接入方式）不再有界面入口，只认手改 config.json（重启生效） */
-  onebot: { host: string; port: number; reverseWsPath: string };
+  /** flavor 在设置页可切（走 POST /api/login/protocol）；llbot.mode（接入方式）仍只认手改 config.json */
+  onebot: { host: string; port: number; reverseWsPath: string; flavor?: string };
   ui?: { expectedQq?: string; chatPreview?: boolean };
   llm: { failoverThreshold: number };
   /** 每会话历史条数与上下文时间窗在 storage 段；旧内核没这个段，可选 */
@@ -100,6 +100,12 @@ const RHYTHM_MODES: PillOpt[] = [
   { v: 'balanced', t: '平衡（加语气与字数判据）' },
   { v: 'aggressive', t: '激进（更早触发）' },
 ];
+/** 协议端三档：名字与内核 deps 的 END_INFO 对齐（SnowLuma 为默认档） */
+const END_OPTS: PillOpt[] = [
+  { v: 'snowluma', t: 'SnowLuma' },
+  { v: 'llbot', t: 'LuckyLillia' },
+  { v: 'napcat', t: 'NapCat' },
+];
 const SECTIONS: { v: string; t: string; icon: string }[] = [
   { v: 'onebot', t: 'QQ 接入', icon: 'plug' },
   { v: 'chat', t: '会话', icon: 'chats' },
@@ -121,6 +127,7 @@ export default function SettingsPage() {
   const [c, setC] = useState<Config | null>(null);
   const [sec, setSec] = useState('onebot');
   const [end, setEnd] = useState<EndStatus | null>(null);
+  const [protocol, setProtocol] = useState('');
   const [checks, setChecks] = useState<EndCheck[]>([]);
   const [checking, setChecking] = useState(false);
   const [checkedAt, setCheckedAt] = useState(0);
@@ -178,10 +185,10 @@ export default function SettingsPage() {
 
   const refreshInfo = useCallback(async () => {
     try {
-      const st = await get('/api/login/status');
-      if (!st.end) return;
-      setEnd(st.end);
-    } catch { setEnd(null); }
+      const st = await get('/api/login/status') as { protocol?: string; end?: EndStatus };
+      if (st.end) setEnd(st.end);
+      setProtocol(st.protocol ?? '');
+    } catch { setEnd(null); setProtocol(''); }
   }, []);
 
   /** 可用性检测：内核逐项实测（发行包 / 前提 / 进程 / 控制台 / 反向 WS） */
@@ -197,6 +204,16 @@ export default function SettingsPage() {
       setChecking(false);
     }
   }, []);
+
+  /** 换协议端：内核停旧端→落盘→后台起新端（首次要下发行包），这里只刷新状态 */
+  const switchEnd = useCallback(async (v: string) => {
+    try {
+      await post('/api/login/protocol', { flavor: v });
+      setErr('');
+      refreshInfo();
+      void runCheck();
+    } catch (e) { setErr(`切换协议端失败：${(e as Error)?.message ?? String(e)}`); }
+  }, [refreshInfo, runCheck]);
 
   const loadCfg = useCallback(async () => {
     const cfg: Config = await get('/api/config');
@@ -317,6 +334,13 @@ export default function SettingsPage() {
 
               <div className="mset-models">
                 <div className="mset-mrow"><span className="plg-k">端点</span><span className="plg-v mono">ws://{c.onebot.host}:{c.onebot.port}{c.onebot.reverseWsPath}</span></div>
+              </div>
+
+              <div className="mset-field">
+                <label className="mset-flabel">协议端</label>
+                <PillSelect align="left" value={protocol || 'snowluma'} label="协议端"
+                  options={END_OPTS} onChange={(v) => void switchEnd(v)} />
+                <div className="plg-hint">切换即时生效：停旧端、起新端；首次用某档会先下发行包，稍等再点「检测」</div>
               </div>
 
               <div className="mset-sec-h">
