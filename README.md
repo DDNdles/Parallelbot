@@ -88,12 +88,13 @@ npm start          # = node bin/parallel.js（内核直接运行 TS 源码，要
 
 ## 🔌 已支持的协议端与模型供应商
 
-### 协议端（三选一，都以 OneBot 11 反向 WS 连回内核）
+### 协议端（任选其一，都以 OneBot 11 反向 WS 连回内核）
 
 | 协议端 | 接入方式 | 内核托管 | 说明 |
 |--------|----------|----------|------|
 | **SnowLuma**（默认） | 注入本机 QQNT | ✅ Windows 自动下载 + 守护 | 注入本机 QQ 客户端、无签名 token 门槛；登录在 QQ 窗口完成，账号守卫防顶号 |
 | **LuckyLilliaBot** | 有头 PMHQ 注入本机 QQNT | ✅ Windows 自动下载 + 守护 | 官方文档明示无头模式有掉线风险，有头是稳的那条路；签名 Auth Token 需向作者申请 |
+| **NapCat** | 引导注入本机 QQNT | ✅ Windows 自动下载 + 守护 | 登录在 QQ 窗口完成；WebUI token 由内核固定注入 |
 | 任意 OneBot 11 端 | 反向 WS 指向 `ws://127.0.0.1:3001/onebot` | — | macOS / Linux 或自带协议端的场景，accessToken 强制鉴权 |
 
 ### 模型连接方式（全部由 pi-ai 实现，内核只做配置与降级）
