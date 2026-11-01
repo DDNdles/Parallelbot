@@ -120,6 +120,8 @@ test('API：/api/setup/auth 免 token 可读可写，响应与日志都不带 to
   const kernel = new Kernel({ dataDir, noApi: true });
   const ob = kernel.config.config.onebot as unknown as Record<string, unknown>;
   ob.port = 31000 + (process.pid % 19000);
+  // 这是 LLBot 专属的 Auth Token 面板：默认端已是 SnowLuma（没这套机制，supported 会是 false），显式钉住 LLBot
+  ob.flavor = 'llbot';
   (kernel.config.config.ui as { port: number }).port = 43000 + (process.pid % 5000);
   await kernel.boot();
   const server = await startApiServer(kernel);

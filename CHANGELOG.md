@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **默认协议端改为 SnowLuma**（`onebot.flavor` 默认 `snowluma`，想继续用 LLBot 手改 config.json 重启）：SnowLuma 注入本机 QQNT、无签名 token 门槛；内核内嵌托管——运行时从官方 Releases 下载发行包（官方源优先 + SHA256 校验）、反向 WS 只写进账号级 `onebot_<uin>.json`（全局配置会让 hookAutoLoad 注入到的每个账号都连进内核）、`SNOWLUMA_HOOK_AUTOLOAD=1` 自动接入登录后的 QQ、崩溃守护；登录在 QQ 客户端窗口完成。环境检查页与登录页跟随当前协议端自动切换。SnowLuma 不随发布包分发（源码可见非商业许可 + EULA，见 THIRD-PARTY-NOTICES）。
+
 ## 0.3.0 (2026-10-31)
 
 分发形态全面铺开的版本：npm 直装、零依赖绿色版、一键安装、winget。

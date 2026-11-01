@@ -21,6 +21,7 @@ import { LLBotManager } from './services/llbot.ts';
 import { bundledFfmpeg } from './services/downloads.ts';
 import { setFfmpegCandidate } from './services/media.ts';
 import { NapCatManager } from './services/napcat.ts';
+import { SnowLumaManager } from './services/snowluma.ts';
 import { ensureFaces } from './services/faces.ts';
 import { PluginContainer } from './container.ts';
 import { CoverSupervisor, planCoverSupervisor } from './cover-supervisor.ts';
@@ -118,6 +119,7 @@ export class Kernel {
   llm: LlmService;
   llbot: LLBotManager;
   napcat: NapCatManager;
+  snowluma: SnowLumaManager;
   container: PluginContainer;
   coverSupervisor: CoverSupervisor;
   /** 应用内更新检查：启动与每 6 小时对照 GitHub latest release（静默失败，纯提示） */
@@ -284,8 +286,12 @@ export class Kernel {
       makeLogger,
     );
     this.chat.attachAdapter(this.adapter);
-    // NapCat 的"在线"就看反向 WS 有没有连上（注入模式下登录发生在 QQ 窗口里）
+    // NapCat / SnowLuma 的"在线"就看反向 WS 有没有连上（注入模式下登录发生在 QQ 窗口里）
     this.napcat = new NapCatManager(this.config, this.errors, makeLogger, () => {
+      const s = this.adapter.status() as { connected?: boolean; selfId?: string; selfNickname?: string };
+      return { connected: !!s.connected, selfId: s.selfId ?? '', nickname: s.selfNickname ?? '' };
+    });
+    this.snowluma = new SnowLumaManager(this.config, this.errors, makeLogger, () => {
       const s = this.adapter.status() as { connected?: boolean; selfId?: string; selfNickname?: string };
       return { connected: !!s.connected, selfId: s.selfId ?? '', nickname: s.selfNickname ?? '' };
     });
@@ -323,9 +329,10 @@ export class Kernel {
     }
   }
 
-  /** 当前托管的协议端（onebot.flavor 决定；另一端只会在切换时被显式停掉） */
+  /** 当前托管的协议端（onebot.flavor 决定；其它端只会在切换时被显式停掉） */
   protocolEnd(): ProtocolEnd {
-    return this.config.config.onebot.flavor === 'napcat' ? this.napcat : this.llbot;
+    const f = this.config.config.onebot.flavor;
+    return f === 'napcat' ? this.napcat : f === 'snowluma' ? this.snowluma : this.llbot;
   }
 
   /** 托管只在带桌面端的内核里跑：noApi（测试/服务模式）不该在后台下载发行包或拉起注入进程 */
@@ -542,6 +549,7 @@ export class Kernel {
     await this.adapter.stop();
     await this.llbot.stop().catch(() => {});
     await this.napcat.stop().catch(() => {});
+    await this.snowluma.stop().catch(() => {});
     // 会话容器不随内核退出自己消失：不在这里收掉，Docker 里会一直留着 compute/browser
     // 两个容器（下次启动还会同名 rm -f 重建，等于白占内存）
     await this.session.stopAll().catch(() => {});

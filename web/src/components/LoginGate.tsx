@@ -24,8 +24,8 @@ interface LoginStatus {
   /** 预期 bot 账号 + 账号守卫结果（登录号与它不符时内核已停止代发） */
   expectedQq?: string;
   accountBlocked?: { got: string; expected: string };
-  /** 当前托管协议端（LLBot / NapCat）与其登录态守护字段（reports/12、reports/13） */
-  protocol?: 'llbot' | 'napcat';
+  /** 当前托管协议端（LLBot / NapCat / SnowLuma）与其登录态守护字段 */
+  protocol?: 'llbot' | 'napcat' | 'snowluma';
   end?: {
     running: boolean; webuiUrl: string; downloaded: boolean; hasToken?: boolean; error?: string;
     mode?: 'pmhq' | 'direct'; qqProfile?: string; expectedQq?: string;

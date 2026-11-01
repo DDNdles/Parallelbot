@@ -36,7 +36,7 @@ export interface DepProbe {
   /** 协议端接入方式：有头模式必须有本机 QQNT */
   headed: boolean;
   /** 当前托管的是哪一档协议端：这一项的名字、落点目录与官网链接全跟着它走，不许写死成 LLBot */
-  endFlavor: 'llbot' | 'napcat';
+  endFlavor: 'llbot' | 'napcat' | 'snowluma';
   /** 协议端发行包是否已就位（来自 manager.status().downloaded） */
   endDownloaded: boolean;
   /** 反向 WS 已经连上：说明协议端在跑（可能是用户自己起的，本内核没下载过），不能算缺失 */
@@ -45,10 +45,11 @@ export interface DepProbe {
   qqPathCfg: string;
 }
 
-/** 两档协议端对外的名字与去处（releases 链接取自内核实际下载用的那两个仓库，不是猜的） */
-export const END_INFO: Record<'llbot' | 'napcat', { name: string; dir: string; releases: string }> = {
+/** 三档协议端对外的名字与去处（releases 链接取自内核实际下载用的那三个仓库，不是猜的） */
+export const END_INFO: Record<'llbot' | 'napcat' | 'snowluma', { name: string; dir: string; releases: string }> = {
   llbot: { name: 'LuckyLillia', dir: 'data/llbot', releases: 'https://github.com/LLOneBot/LuckyLilliaBot/releases' },
   napcat: { name: 'NapCat', dir: 'data/napcat', releases: 'https://github.com/NapNeko/NapCatQQ/releases' },
+  snowluma: { name: 'SnowLuma', dir: 'data/snowluma', releases: 'https://github.com/SnowLuma/SnowLuma/releases' },
 };
 
 const PROBE_TIMEOUT_MS = 6000;

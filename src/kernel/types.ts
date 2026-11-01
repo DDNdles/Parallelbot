@@ -640,12 +640,12 @@ export interface EndCheck {
 }
 
 /**
- * 内核托管的协议端（LLBot 与 NapCat 各自实现）。
- * 对内核来说两者只是同一个 OneBot 11 反向 WS 的两个来源，差别全在"谁被下载、拉起、守护、代理登录"。
+ * 内核托管的协议端（LLBot / NapCat / SnowLuma 各自实现）。
+ * 对内核来说三者只是同一个 OneBot 11 反向 WS 的不同来源，差别全在"谁被下载、拉起、守护、代理登录"。
  * 托管常驻开启：桌面内核启动即 start()，没有关的入口。
  */
 export interface ProtocolEnd {
-  readonly id: 'llbot' | 'napcat';
+  readonly id: 'llbot' | 'napcat' | 'snowluma';
   running(): boolean;
   /** 给桌面端与登录页看的状态包：各端字段不同，前端按 protocol 分支渲染 */
   status(): Record<string, unknown>;

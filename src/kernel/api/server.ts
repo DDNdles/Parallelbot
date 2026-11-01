@@ -252,7 +252,7 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
           lastLogin: kernel.config.config.ui.lastLogin,
           expectedQq: st.expectedQq || '',
           accountBlocked: st.accountBlocked,
-          protocol: kernel.config.config.onebot.flavor ?? 'llbot',
+          protocol: kernel.config.config.onebot.flavor ?? 'snowluma',
           end,
         });
       }
@@ -303,9 +303,11 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
         const end = kernel.protocolEnd();
         return {
           dataDir: kernel.dataDir,
-          // 有头模式（PMHQ / NapCat 注入）必须有本机 QQNT；无头直连不需要
-          headed: kernel.config.config.onebot.flavor === 'napcat' || String(ob.llbot?.mode ?? 'pmhq') === 'pmhq',
-          // 这一项对外的名字与落点跟着当前那一档走（LuckyLillia / NapCat）
+          // 有头模式（PMHQ / NapCat / SnowLuma 注入）必须有本机 QQNT；无头直连不需要
+          headed: kernel.config.config.onebot.flavor === 'napcat'
+            || kernel.config.config.onebot.flavor === 'snowluma'
+            || String(ob.llbot?.mode ?? 'pmhq') === 'pmhq',
+          // 这一项对外的名字与落点跟着当前那一档走（LuckyLillia / NapCat / SnowLuma）
           endFlavor: end.id,
           endDownloaded: !!end.status().downloaded,
           // 用户自己起的协议端（不走托管）也算在跑：别让这页报"必备项缺失"
@@ -1129,19 +1131,19 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
         }
         for (const section of ['onebot', 'persona'] as const) {
           if (body[section] && typeof body[section] === 'object') {
-            // onebot.llbot / onebot.napcat 嵌套合并，避免浅覆盖丢字段；
+            // onebot.llbot / onebot.napcat / onebot.snowluma 嵌套合并，避免浅覆盖丢字段；
             // flavor（协议端）不走这里——换端只认 config.json 手改（重启内核生效），API/界面都没有切换入口
             if (section === 'onebot') {
-              const { llbot, napcat, flavor, ...rest } = body.onebot;
+              const { llbot, napcat, snowluma, flavor, ...rest } = body.onebot;
               Object.assign(cfg.onebot, rest);
-              // 两端各自的子块只收这几项，端口必须是数（拼进 URL 用），路径去空白
-              for (const [key, patch] of [['llbot', llbot], ['napcat', napcat]] as const) {
+              // 三端各自的子块只收这几项，端口必须是数（拼进 URL 用），路径去空白
+              for (const [key, patch] of [['llbot', llbot], ['napcat', napcat], ['snowluma', snowluma]] as const) {
                 if (!patch || typeof patch !== 'object') continue;
                 const cur = cfg.onebot[key] as Record<string, unknown>;
                 const p = patch as Record<string, unknown>;
                 if (typeof p.qqPath === 'string') cur.qqPath = p.qqPath.trim().slice(0, 260);
                 if (key === 'llbot' && (p.mode === 'pmhq' || p.mode === 'direct')) cur.mode = p.mode;
-                if (key === 'napcat' && Number.isInteger(p.webuiPort) && (p.webuiPort as number) > 0 && (p.webuiPort as number) < 65536) {
+                if ((key === 'napcat' || key === 'snowluma') && Number.isInteger(p.webuiPort) && (p.webuiPort as number) > 0 && (p.webuiPort as number) < 65536) {
                   cur.webuiPort = p.webuiPort;
                 }
               }
