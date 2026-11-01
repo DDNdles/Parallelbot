@@ -235,10 +235,19 @@ export class SnowLumaManager implements ProtocolEnd {
    * 反向 WS 写进**账号级** onebot_<uin>.json，绝不能写全局：
    * 全局配置会被 hookAutoLoad 注入到的每个账号继承（包括用户自己在用的 QQ），
    * 而账号一旦登录就会固化为快照、之后全局改动再也传不进去。
+   *
+   * 另外要在文件缺失时预置一份**空 networks** 的全局 onebot.json：SnowLuma 首跑自带的默认监听
+   * （ob11 wsServer 127.0.0.1:3001 / http 3000）前者正好撞内核的反向 WS 端口 —— 先占位成空，
+   * 它就一个监听都不开，只剩我们这条反向 WS。文件已存在（用户自己跑过 SnowLuma）则一律不碰。
    */
   private writeNetworkConfig(uin: string): void {
     const dir = join(this.homeDir(), 'config');
     mkdirSync(dir, { recursive: true });
+    const globalPath = join(dir, 'onebot.json');
+    if (!existsSync(globalPath)) {
+      writeFileSync(globalPath, JSON.stringify({ networks: { httpServers: [], httpClients: [], wsServers: [], wsClients: [] } }, null, 2));
+      this.log.info('已预置空 networks 的全局 onebot.json（避免 SnowLuma 默认监听撞内核反向 WS 端口）');
+    }
     const path = join(dir, `onebot_${uin}.json`);
     let cur: unknown = {};
     try { cur = JSON.parse(readFileSync(path, 'utf-8')); } catch { /* 首次：用空底子 */ }
