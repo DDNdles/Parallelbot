@@ -171,7 +171,7 @@ export class SnowLumaManager implements ProtocolEnd {
     // 没设预期账号就宁可不起（否则可能拿你自己的号去回别人的消息）。
     const uin = String(this.config.config.ui.expectedQq || '').trim();
     if (!/^\d+$/.test(uin)) {
-      this.lastError = '未设置预期 bot 账号：请在 data/config.json 的 ui.expectedQq 填入本 bot 的 QQ 号后重启协议端。';
+      this.lastError = '未设置预期 bot 账号：在登录门的「本 bot 的 QQ 号」输入框填入后点「保存并打开」（或改 data/config.json 的 ui.expectedQq）。';
       this.log.warn(this.lastError);
       this.errors.record('warn', 'adapter', this.lastError);
       return;

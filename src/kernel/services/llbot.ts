@@ -258,7 +258,7 @@ export class LLBotManager implements ProtocolEnd {
     // 有头模式必须知道"这个 bot 该是哪个号"：PMHQ 寄生在本机 QQ 上，登着谁就顶着谁发言，
     // 没设预期账号就宁可不起（否则可能拿你自己的号去回别人的消息）。
     if (this.mode() === 'pmhq' && !String(this.config.config.ui.expectedQq || '').trim()) {
-      this.lastError = '有头模式（PMHQ）未设置预期 bot 账号：请在 data/config.json 的 ui.expectedQq 填入本 bot 的 QQ 号后重启内核。';
+      this.lastError = '有头模式（PMHQ）未设置预期 bot 账号：在登录门的「本 bot 的 QQ 号」输入框填入后点「保存并打开」（或改 data/config.json 的 ui.expectedQq）。';
       this.log.warn(this.lastError);
       this.errors.record('warn', 'adapter', this.lastError);
       return;
@@ -354,7 +354,11 @@ export class LLBotManager implements ProtocolEnd {
   private writeAuthToken(): void {
     const token = (this.config.secrets.llbotAuthToken || '').trim();
     if (!token) {
-      this.log.warn('未配置 secrets.llbotAuthToken：LLBot 将无法登录 QQ，请在 data/secrets.json 填入');
+      // 警告只在无头直连打：有头（PMHQ）是本机真 QQ 自己签名，没 token 是常态 ——
+      // 这句若在有头模式也打，读日志的人（和人养的 AI）都会误诊成「没 token 起不来」
+      if (this.mode() === 'direct') {
+        this.log.warn('未配置 secrets.llbotAuthToken：无头直连无法签名登录，请在 data/secrets.json 填入（有头模式不需要 token）');
+      }
       return;
     }
     writeFileSync(join(this.llbotDataDir(), 'auth_token.txt'), token, 'utf-8');

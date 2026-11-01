@@ -49,6 +49,8 @@ export default function LoginGate({ onEnter, onToggleTheme }: {
   const [stateCls, setStateCls] = useState('');
   const [opening, setOpening] = useState(false);
   const [avOK, setAvOK] = useState(true);
+  /** 首次登录时内联收集预期 bot 账号：设置页在门后面够不着，没有它有头模式永远拒绝启动 */
+  const [qqDraft, setQqDraft] = useState('');
   const timers = useRef<ReturnType<typeof setInterval | typeof setTimeout>[]>([]);
   const enteredRef = useRef(false);
   useEffect(() => { setAvOK(true); }, [info?.qq]);   // 换号后重新试头像
@@ -157,6 +159,9 @@ export default function LoginGate({ onEnter, onToggleTheme }: {
     }
     const m = info?.end;
     if (!m || m.online) return '';
+    // 托管端自报的启动拦截（预期账号没填 / PMHQ 前置拒绝 / 发行包没下下来）：这是登录门最该说的话，
+    // 否则全新机器上「点 QQNT 没反应、重启也没用」，用户连原因都看不到
+    if (m.error) return `协议端起不来：${m.error}`;
     // 有头模式下「没有踢线通知的掉线」= 有人在 QQ 窗口里点了退出登录：内核已停止自动重登，
     // 这里要说清是人为退出而不是网络抖动，恢复动作就是下面那颗按钮。
     if (m.loggedOutByUser) return '已在 QQ 里退出登录，parallel 不会自动把你登回去。要恢复请点下面的「打开 QQNT」。';
@@ -192,9 +197,28 @@ export default function LoginGate({ onEnter, onToggleTheme }: {
         {online ? (
           <button id="login-enter" className="login-btn" onClick={commitEnter}>进入控制台</button>
         ) : (
-          <button id="login-qqnt" className="login-btn" disabled={opening} onClick={openQqnt}>
-            {opening ? '正在打开…' : '打开 QQNT'}
-          </button>
+          <>
+            {/* 预期账号没登记过（全新机器常态）：有头模式没它拒绝启动，先在这儿收 —— 登录门挡着，设置页够不着 */}
+            {!blocked && info && !info.expectedQq && (
+              <div className="login-qqrow">
+                <input className="login-qq-in mono" placeholder="本 bot 的 QQ 号" value={qqDraft}
+                  inputMode="numeric" maxLength={12} spellCheck={false}
+                  onChange={(e) => setQqDraft(e.target.value.replace(/\D/g, ''))} />
+                <button className="login-btn login-btn-sm" disabled={qqDraft.trim().length < 5} onClick={async () => {
+                  try {
+                    await post('/api/config', { expectedQq: qqDraft.trim() });
+                    await openQqnt();
+                  } catch (e) {
+                    setStateMsg(`保存失败：${(e as Error).message}`);
+                    setStateCls('err');
+                  }
+                }}>保存并打开</button>
+              </div>
+            )}
+            <button id="login-qqnt" className="login-btn" disabled={opening} onClick={openQqnt}>
+              {opening ? '正在打开…' : '打开 QQNT'}
+            </button>
+          </>
         )}
 
         <label className="login-auto"><input type="checkbox" id="login-auto-chk" /><span>自动登录，下次直接进入</span></label>
