@@ -10,29 +10,23 @@ import { ConfigStore, freshDefaultConfig } from '../src/kernel/config.ts';
 import { Db } from '../src/kernel/db.ts';
 import { Bus } from '../src/kernel/bus.ts';
 import { ErrorCenter } from '../src/kernel/errors.ts';
-import { coerceLike } from '../src/kernel/util/misc.ts';
 import {
   NapCatManager, mergeNapcatNetworkConfig, napcatWsClient,
 } from '../src/kernel/services/napcat.ts';
-import {
-  SnowLumaManager, mergeSnowlumaOneBotConfig, snowlumaWsClient,
-} from '../src/kernel/services/snowluma.ts';
 import { qqPathFromUninstallString } from '../src/kernel/services/deps.ts';
 import { MockOneBot } from './helpers/mock-onebot.ts';
 
 /**
- * 协议端三选一（LLBot / NapCat / SnowLuma），托管常驻开启；界面上没有端切换入口，
- * 换端只认手改 config.json（重启生效）。默认 SnowLuma（2026-11-01 起）：注入本机 QQNT、
- * 无签名 token 门槛。界面侧没有托管开关，只剩「检测」这条逐项实测（发行包 / 前提 / 进程 / 控制台 / 反向 WS）。
+ * 协议端二选一（LLBot / NapCat），托管常驻开启；界面上没有端切换入口之外的差异，
+ * 换端走设置页那颗胶囊（POST /api/login/protocol）。默认仍是 LLBot / 有头 PMHQ。
+ * 预期账号（ui.expectedQq）不是启动前置：登哪个就是哪个；手填才启用账号守卫与快速登录。
  */
 const ANY = (x: unknown) => x as Record<string, unknown>;
 const clients = (cfg: Record<string, unknown>) => ANY(ANY(cfg.network)).websocketClients as Record<string, unknown>[];
-const wsClients = (cfg: Record<string, unknown>) => ANY(ANY(cfg.networks)).wsClients as Record<string, unknown>[];
 
-test('默认协议端是 SnowLuma；老配置里的 managed 键被迁移清掉', () => {
+test('默认协议端是 LLBot；老配置里的 managed 键与 SnowLuma 残块被迁移清掉', () => {
   const d = freshDefaultConfig();
-  assert.equal(d.onebot.flavor, 'snowluma');
-  assert.equal(ANY(d.onebot.snowluma).webuiPort, 5099);
+  assert.equal(d.onebot.flavor, 'llbot');
   assert.equal(ANY(d.onebot.llbot).managed, undefined);
   assert.equal(ANY(d.onebot.napcat).managed, undefined);
   assert.equal(ANY(d.onebot.napcat).webuiPort, 6099);
@@ -46,9 +40,7 @@ test('默认协议端是 SnowLuma；老配置里的 managed 键被迁移清掉',
   assert.equal(ANY(store.config.onebot.llbot).junk, undefined, '未知键一并清掉');
   assert.equal(ANY(store.config.onebot.llbot).mode, 'direct', '有用的键保留');
   assert.equal(ANY(store.config.onebot.napcat).managed, undefined);
-  assert.equal(ANY(store.config.onebot.snowluma).managed, undefined, 'SnowLuma 旧托管时代的开关键一并清掉');
-  assert.equal(ANY(store.config.onebot.snowluma).junk, undefined);
-  assert.equal(ANY(store.config.onebot.snowluma).webuiPort, 5099, 'SnowLuma 端口补默认值');
+  assert.equal(ANY(store.config.onebot).snowluma, undefined, 'SnowLuma 残块整个清掉（2026-11-01 已拆）');
   assert.equal(ANY(store.config.onebot).port, 3999);
 });
 
@@ -71,44 +63,23 @@ test('反向 WS 客户端写成官方 schema，并保留用户已有的其它网
   assert.equal(clients(twice).find((c) => c.name === 'parallel')?.url, 'ws://127.0.0.1:3001/onebot');
 });
 
-test('SnowLuma 反向 WS 客户端写成官方 schema，并保留账号级配置已有的其它网络', () => {
-  const client = snowlumaWsClient('ws://127.0.0.1:3001/onebot', 'tk');
-  assert.deepEqual(wsClients(mergeSnowlumaOneBotConfig({}, client))[0], {
-    name: 'parallel', enabled: true, url: 'ws://127.0.0.1:3001/onebot', role: 'Universal',
-    reconnectIntervalMs: 5000, accessToken: 'tk', messageFormat: 'array', reportSelfMessage: false,
-  });
-  const user = { statusCommand: { trigger: '#sl' }, networks: { wsServers: [{ name: 'ws-default', port: 3001 }], wsClients: [{ name: '别的', url: 'ws://x' }] } };
-  const once = mergeSnowlumaOneBotConfig(user, client);
-  assert.equal(once.statusCommand, ANY(user).statusCommand, '顶层字段原样保留');
-  assert.equal(ANY(ANY(ANY(once.networks).wsServers)[0]).name, 'ws-default');
-  assert.deepEqual(wsClients(once).map((c) => c.name), ['别的', 'parallel']);
-  // 幂等：被改坏的条目会被拉回内核期望值，且不会多出第二条
-  const broken = mergeSnowlumaOneBotConfig(user, { ...client, url: 'ws://旧地址' });
-  const twice = mergeSnowlumaOneBotConfig(broken, client);
-  assert.equal(wsClients(twice).filter((c) => c.name === 'parallel').length, 1);
-  assert.equal(wsClients(twice).find((c) => c.name === 'parallel')?.url, 'ws://127.0.0.1:3001/onebot');
-});
-
 test('QQ 路径按官方启动脚本的口径从注册表卸载器路径推出', () => {
   assert.equal(qqPathFromUninstallString('"C:\\Program Files\\Tencent\\QQNT\\Uninstall.exe"'), join('C:\\Program Files\\Tencent\\QQNT', 'QQ.exe'));
   assert.equal(qqPathFromUninstallString('C:\\QQNT\\Uninstall.exe'), join('C:\\QQNT', 'QQ.exe'));
   assert.equal(qqPathFromUninstallString(''), '');
 });
 
-test('无头内核不托管；切成 SnowLuma / NapCat 后 LLBot 也不会被拉起', async () => {
+test('无头内核不托管；切成 NapCat 后 LLBot 也不会被拉起', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'parallel-flavor-'));
   const kernel = new Kernel({ dataDir, noApi: true });
   ANY(ANY(kernel.config.config.onebot)).port = 30000 + (process.pid % 20000);
-  ANY(kernel.config.config.onebot).flavor = 'snowluma';
+  ANY(kernel.config.config.onebot).flavor = 'napcat';
   await kernel.boot();
   try {
-    assert.equal(kernel.protocolEnd().id, 'snowluma');
+    assert.equal(kernel.protocolEnd().id, 'napcat');
     assert.equal(kernel.llbot.running(), false, 'noApi 内核不该托管任何协议端');
     assert.equal(kernel.napcat.running(), false);
-    assert.equal(kernel.snowluma.running(), false);
-    assert.match(String(ANY(kernel.snowluma.status()).webuiUrl), /^http:\/\/127\.0\.0\.1:5099$/);
-    ANY(kernel.config.config.onebot).flavor = 'napcat';
-    assert.equal(kernel.protocolEnd().id, 'napcat');
+    assert.equal(ANY(kernel.napcat.status()).managed, undefined, '状态里不再有托管字段');
     assert.match(String(ANY(kernel.napcat.status()).webuiUrl), /^http:\/\/127\.0\.0\.1:6099\/webui\?token=[0-9a-f]{12}$/);
     ANY(kernel.config.config.onebot).flavor = 'llbot';
     assert.equal(kernel.protocolEnd().id, 'llbot');
@@ -141,39 +112,12 @@ test('NapCat 布局两种包都认，且没有可代理的二维码', async () =
   db.close();
 });
 
-test('SnowLuma 布局就位判定与注入式登录形态', async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'parallel-snowluma-'));
-  const db = new Db(dataDir);
-  const bus = new Bus();
-  const errors = new ErrorCenter(bus, { dataDir });
-  const config = new ConfigStore(dataDir, bus, errors);
-  const m = new SnowLumaManager(config, errors, makeLogger, () => ({ connected: false, selfId: '', nickname: '' }));
-  assert.equal(m.id, 'snowluma');
-  assert.equal(m.running(), false);
-  assert.equal(m.downloaded(), false);
-  // 发行包是平铺布局：index.mjs 与 node.exe 就在包根
-  const home = join(dataDir, 'snowluma');
-  mkdirSync(home, { recursive: true });
-  writeFileSync(join(home, 'index.mjs'), '');
-  writeFileSync(join(home, 'node.exe'), '');
-  assert.equal(m.downloaded(), true);
-  assert.equal(m.webuiUrl(), 'http://127.0.0.1:5099');
-  assert.equal(await m.fetchQrcode(), null);   // 注入模式在 QQ 窗口里扫码
-  const checks = await m.check();
-  assert.deepEqual(checks.map((c) => c.label), ['发行包', '注入目标', '进程', '控制台']);
-  assert.equal(checks[0].state, 'pass');
-  assert.equal(checks[2].state, 'fail');       // 进程没起
-  db.close();
-});
-
 test('登录判定看协议端自报的在线，不看反向 WS：QQ 退了 WS 还连着也不算已登录', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'parallel-login-gate-'));
   const kernel = new Kernel({ dataDir, noApi: true });
   const onebot = ANY(kernel.config.config.onebot);
   onebot.port = 30000 + (process.pid % 20000);
-  // 这条只测 LLBot 的看门狗语义（协议端自报 online）：显式钉住 flavor，
-  // 别跟着默认端（SnowLuma）走 —— 注入式协议端的 online 就是反向 WS 本身，测不出这个差别
-  onebot.flavor = 'llbot';
+  // 桌面端口也要避开：3080 上常驻着真内核，裸用默认端口这测试谁开机谁炸
   ANY(kernel.config.config.ui).port = 41000 + (process.pid % 8000);
   await kernel.boot();
   const server = await startApiServer(kernel);
@@ -215,8 +159,8 @@ test('API：换端入口（设置页胶囊）：切换落盘并停旧起新；�
     return { status: r.status, body: ANY(await r.json()) };
   };
   try {
-    assert.equal((await get('/api/login/status')).protocol, 'snowluma');
-    // 换端入口回归（设置页）：停旧端→落盘→（托管内核）起新端；未知档拒绝；noApi 不该触发下载
+    assert.equal((await get('/api/login/status')).protocol, 'llbot');
+    // 换端入口（设置页胶囊）：停旧端→落盘→（托管内核）起新端；未知档拒绝；noApi 不该触发下载
     assert.equal((await post('/api/login/protocol', { flavor: 'bogus' })).status, 400);
     const sw = await post('/api/login/protocol', { flavor: 'napcat' });
     assert.equal(sw.status, 200);
@@ -232,11 +176,6 @@ test('API：换端入口（设置页胶囊）：切换落盘并停旧起新；�
     assert.equal(same.status, 200);
     assert.equal(same.body.protocol, 'napcat');
 
-    // 与手改 config.json 等价：flavor 被改后（启动读取或手改内存），状态如实反映当前协议端
-    ANY(kernel.config.config.onebot).flavor = 'napcat';
-    assert.equal((await get('/api/login/status')).protocol, 'napcat');
-    assert.equal(kernel.llbot.running(), false);
-    assert.equal(kernel.napcat.running(), false);
     // 无头内核不托管：换端 / 重启都不该去下载发行包或拉起注入进程（真跑过一次会往本机 QQ 里注入）
     await post('/api/login/end/restart');
     assert.equal(kernel.napcat.downloaded(), false, 'noApi 内核不该下载 NapCat 发行包');
@@ -254,15 +193,12 @@ test('API：换端入口（设置页胶囊）：切换落盘并停旧起新；�
     assert.ok(rows.some((r) => r.label === '反向 WS' && r.state === 'fail'), '没连上就该报 fail');
 
     // 子块白名单：路径去空白、端口要合法整数，managed/非法 mode 不收
-    await post('/api/config', { onebot: { napcat: { qqPath: '  D:\\QQ\\QQ.exe  ', webuiPort: 7000, managed: true }, llbot: { mode: 'bogus' }, snowluma: { webuiPort: 5150, managed: true } } });
+    await post('/api/config', { onebot: { napcat: { qqPath: '  D:\\QQ\\QQ.exe  ', webuiPort: 7000, managed: true }, llbot: { mode: 'bogus' } } });
     const nap = ANY(ANY(kernel.config.config.onebot).napcat);
     assert.equal(nap.qqPath, 'D:\\QQ\\QQ.exe');
     assert.equal(nap.webuiPort, 7000);
     assert.equal(nap.managed, undefined, '托管没有开关入口');
     assert.equal(ANY(ANY(kernel.config.config.onebot).llbot).mode, 'pmhq');
-    const sl = ANY(ANY(kernel.config.config.onebot).snowluma);
-    assert.equal(sl.webuiPort, 5150);
-    assert.equal(sl.managed, undefined);
     await post('/api/config', { onebot: { napcat: { webuiPort: 99999 } } });
     assert.equal(ANY(ANY(kernel.config.config.onebot).napcat).webuiPort, 7000, '越界端口不改值');
   } finally {

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **默认协议端改为 SnowLuma**（`onebot.flavor` 默认 `snowluma`，想继续用 LLBot 手改 config.json 重启）：SnowLuma 注入本机 QQNT、无签名 token 门槛；内核内嵌托管——运行时从官方 Releases 下载发行包（官方源优先 + SHA256 校验）、反向 WS 只写进账号级 `onebot_<uin>.json`（全局配置会让 hookAutoLoad 注入到的每个账号都连进内核）、`SNOWLUMA_HOOK_AUTOLOAD=1` 自动接入登录后的 QQ、崩溃守护；登录在 QQ 客户端窗口完成。**设置页「QQ 接入」新增协议端切换**（SnowLuma / LuckyLillia / NapCat 三档胶囊，`POST /api/login/protocol`：停旧端→落盘→后台起新端，config API 仍不收 flavor）。托管首启预置空 networks 的全局 `onebot.json`，防 SnowLuma 自带默认监听（ob11 wsServer 3001）撞内核反向 WS 端口。**全新机器登录门修死胡同**：预期账号（`ui.expectedQq`）没登记时有头模式拒绝启动、登录门又不显示原因——现在登录门直接内联收集（「本 bot 的 QQ 号」→ 保存并打开），托管端的启动拦截原因也会显示在门上；LLBot 无头 token 警告只在 direct 模式打（有头模式不需要 token，旧日志会让排障的 AI 误诊成「没 token 起不来」）。SnowLuma 不随发布包分发（源码可见非商业许可 + EULA，见 THIRD-PARTY-NOTICES）。README 协议端表补回 **NapCat**（内核托管三档，均为 Windows 自动下载 + 守护）。
+- **预期账号（`ui.expectedQq`）不再是启动前置**：登哪个号，bot 就是哪个号（适配器在预期账号为空时不设限，本就如此）。它降级为可选项：手填仍可启用账号守卫与 PMHQ 快速登录。设置页「QQ 接入」新增**协议端切换**（LuckyLillia / NapCat 两档胶囊，`POST /api/login/protocol`：停旧端→落盘→后台起新端，config API 仍不收 flavor）。登录门会显示托管端的启动拦截原因（如本机有别的 QQ 在跑、发行包下载失败）。README 协议端表补回 **NapCat**。LLBot 无头 token 警告只在 direct 模式打（有头模式不需要 token，旧日志会让排障的 AI 误诊成「没 token 起不来」）。
 
 ## 0.3.0 (2026-10-31)
 

@@ -56,13 +56,9 @@ export const DEFAULT_CONFIG = {
     reverseWsPath: '/onebot',             // 协议端反向 WS 上报地址
     port: 3001,                           // 反向 WS 服务端口
     host: '127.0.0.1',
-    /** 协议端（三家都只说 OneBot 11 反向 WS，接入侧无差别；差别在内核托管哪一个）。
-     *  托管常驻开启：桌面内核启动即自动下载/拉起/守护，界面上不再有开关。
-     *  默认 SnowLuma（2026-11-01 起）：注入本机 QQNT、无签名 token 门槛；想继续用 LLBot 就手改这里。 */
-    flavor: 'snowluma' as 'snowluma' | 'llbot' | 'napcat',
-    snowluma: {
-      webuiPort: 5099,                    // SnowLuma WebUI 端口（官方默认；经 SNOWLUMA_WEBUI_PORT 注入，不改它的文件）
-    },
+    /** 协议端（两者都只说 OneBot 11 反向 WS，接入侧无差别；差别在内核托管哪一个）。
+     *  托管常驻开启：桌面内核启动即自动下载/拉起/守护，界面上不再有开关。默认 LLBot（有头 PMHQ）。 */
+    flavor: 'llbot' as 'llbot' | 'napcat',
     llbot: {
       // 接入方式：'pmhq' = 有头模式（PMHQ 注入本机 QQNT；官方文档明示「无头模式有掉线风险」，PMHQ 是稳的那条路）
       //           'direct' = 无头模式（纯协议直连 + 签名服务 Auth Token）——**2026-10-11 起放弃**：
@@ -363,20 +359,18 @@ export class ConfigStore {
     this.secrets = { ...defaultSecrets(), ...readJson<Partial<Secrets>>(this.secretsFile, {}) };
     this.secrets.providerKeys = this.secrets.providerKeys ?? {};
     this.secrets.pluginSecrets = this.secrets.pluginSecrets ?? {};
-    // 迁移：协议端托管改为常驻，三端配置里的 managed 键一并清掉
-    // （SnowLuma 旧托管时代的 onebot.snowluma.managed 也落在这条通例里，2026-11-01 SnowLuma 重新接入后仍适用）
-    for (const end of ['llbot', 'napcat', 'snowluma'] as const) {
+    // 迁移：SnowLuma 接入已移除（2026-11-01 短暂接入当日即拆，配置块整个清掉）；协议端托管改为常驻，
+    // 两端配置里的 managed 键一并清掉
+    if ((this.config.onebot as any).snowluma) {
+      delete (this.config.onebot as any).snowluma;
+    }
+    for (const end of ['llbot', 'napcat'] as const) {
       const block = (this.config.onebot as any)[end];
       if (block && typeof block === 'object') delete block.managed;
     }
     if (this.config.onebot.llbot && typeof this.config.onebot.llbot === 'object') {
       for (const k of Object.keys(this.config.onebot.llbot)) {
         if (k !== 'webuiPort' && k !== 'mode' && k !== 'qqPath' && k !== 'qqProfileDir') delete (this.config.onebot.llbot as any)[k];
-      }
-    }
-    if (this.config.onebot.snowluma && typeof this.config.onebot.snowluma === 'object') {
-      for (const k of Object.keys(this.config.onebot.snowluma)) {
-        if (k !== 'webuiPort') delete (this.config.onebot.snowluma as any)[k];
       }
     }
     this.migrateModelChains();

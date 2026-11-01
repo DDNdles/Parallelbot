@@ -52,8 +52,8 @@ npm start          # = node bin/parallel.js（内核直接运行 TS 源码，要
 
 ### 接入真机
 
-1. 选协议端：默认使用 SnowLuma，无需其他操作。**内嵌托管只支持 Windows**（自动下载发行包、预写反向 WS 配置、拉起并守护）；macOS/Linux 上内核本身可跑，但请自行运行 OneBot 11 协议端并指向内核
-2. 在弹出的 QQ 窗口扫码登录账号
+1. 选协议端：默认使用llbot，无需其他操作。**内嵌托管只支持 Windows**（自动下载发行包、预写反向 WS 配置、拉起并守护）；macOS/Linux 上内核本身可跑，但请自行运行 OneBot 11 协议端并指向内核
+2. 在弹出的 QQ 窗口扫码登录账号——登哪个号，bot 就是哪个号（想锁号防顶号可在设置页「QQ 接入」的「账号」里填预期 QQ，属可选）
 4. 在桌面端「用户」页的权限名单里配置主人 QQ（`masterIds`）
 
 ## ✨ 特性
@@ -92,8 +92,7 @@ npm start          # = node bin/parallel.js（内核直接运行 TS 源码，要
 
 | 协议端 | 接入方式 | 内核托管 | 说明 |
 |--------|----------|----------|------|
-| **SnowLuma**（默认） | 注入本机 QQNT | ✅ Windows 自动下载 + 守护 | 注入本机 QQ 客户端、无签名 token 门槛；登录在 QQ 窗口完成，账号守卫防顶号 |
-| **LuckyLilliaBot** | 有头 PMHQ 注入本机 QQNT | ✅ Windows 自动下载 + 守护 | 官方文档明示无头模式有掉线风险，有头是稳的那条路；签名 Auth Token 需向作者申请 |
+| **LuckyLilliaBot**（默认） | 有头 PMHQ 注入本机 QQNT | ✅ Windows 自动下载 + 守护 | 官方文档明示无头模式有掉线风险，有头是稳的那条路；账号守卫可选 |
 | **NapCat** | 引导注入本机 QQNT | ✅ Windows 自动下载 + 守护 | 登录在 QQ 窗口完成；WebUI token 由内核固定注入 |
 | 任意 OneBot 11 端 | 反向 WS 指向 `ws://127.0.0.1:3001/onebot` | — | macOS / Linux 或自带协议端的场景，accessToken 强制鉴权 |
 
@@ -139,7 +138,7 @@ npm start          # = node bin/parallel.js（内核直接运行 TS 源码，要
 
 ```mermaid
 flowchart TB
-    QQS["QQ 服务器"] <--> PROTO["协议端（SnowLuma / LLBot / NapCat）<br/>OneBot 11 反向 WS"]
+    QQS["QQ 服务器"] <--> PROTO["协议端（LLBot / NapCat）<br/>OneBot 11 反向 WS"]
     PROTO -- "入站事件" --> PIPE["Pipeline<br/>拉黑闸 · 隐藏收口 · 限速"]
     PIPE --> GATE["拟人层 frequency<br/>条数门槛 · 空窗补偿 · 退避"]
     GATE --> LOOP["Agent Loop（pi-agent-core）<br/>system 分节 + 历史 + 工具调度"]
@@ -174,7 +173,7 @@ flowchart TB
 | `masterIds` | `[]` | 主人 QQ 白名单（主人专属能力的判据） |
 | `ui.port` / `ui.host` | `3080` / `127.0.0.1` | 桌面端监听地址 |
 | `onebot.port` | `3001` | OneBot 11 反向 WS 服务端口 |
-| `onebot.flavor` | `snowluma` | 协议端：`snowluma` / `llbot` / `napcat`（改后重启） |
+| `onebot.flavor` | `llbot` | 协议端：`llbot` / `napcat`（改后重启；设置页也可切） |
 | `llm.chatChain` / `llm.workChain` | `[]` | 聊天 / 工作两条优先链（供应商+模型有序列表） |
 | `llm.failoverThreshold` | `2` | 同链连续掉线 N 次才切下一个模型 |
 | `storage.historyLimit` | `200` | 每会话传给模型的近端历史条数 |

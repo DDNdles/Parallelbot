@@ -255,14 +255,8 @@ export class LLBotManager implements ProtocolEnd {
     const home = this.homeDir();
     mkdirSync(home, { recursive: true });
     mkdirSync(this.llbotDataDir(), { recursive: true });
-    // 有头模式必须知道"这个 bot 该是哪个号"：PMHQ 寄生在本机 QQ 上，登着谁就顶着谁发言，
-    // 没设预期账号就宁可不起（否则可能拿你自己的号去回别人的消息）。
-    if (this.mode() === 'pmhq' && !String(this.config.config.ui.expectedQq || '').trim()) {
-      this.lastError = '有头模式（PMHQ）未设置预期 bot 账号：在登录门的「本 bot 的 QQ 号」输入框填入后点「保存并打开」（或改 data/config.json 的 ui.expectedQq）。';
-      this.log.warn(this.lastError);
-      this.errors.record('warn', 'adapter', this.lastError);
-      return;
-    }
+    // 预期账号（ui.expectedQq）不再是启动前置（2026-11-01 用户定：登哪个就是哪个）。
+    // 它仍是可选项：填了就启用适配器账号守卫 + PMHQ 快速登录，不填则适配器不设限（扫谁的码就是谁）。
     if (!existsSync(this.exePath())) {
       await this.downloadAndExtract(home);
     }

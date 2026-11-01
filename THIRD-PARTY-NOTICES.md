@@ -18,9 +18,8 @@ AGPL 对你的实际影响：自己用、改了自己用不需要做任何事；
 
 | 组件 | 许可 | 说明 |
 |---|---|---|
-| LLBot / LuckyLilliaBot | GPL-2.0 | 默认外的协议端之一；内核按需从 [官方 Releases](https://github.com/LLOneBot/LuckyLilliaBot/releases) 下载发行包到本机 `data/` |
-| NapCat | 自定义（见其仓库） | 默认外的协议端之一；同上，从 [官方 Releases](https://github.com/NapNeko/NapCatQQ/releases) 下载 |
-| SnowLuma | 源码可见非商业许可 + EULA | **默认协议端**（2026-11-01 起）：注入本机 QQNT 桥接 OneBot 11。运行时从 [官方 Releases](https://github.com/SnowLuma/SnowLuma/releases) 下载发行包到本机 `data/snowluma/`，本仓库不修改、不捆绑、不再分发其任何文件；其非商业条款与 EULA 由使用者在下载使用时自行接受 |
+| LLBot / LuckyLilliaBot | GPL-2.0 | 默认协议端；内核按需从 [官方 Releases](https://github.com/LLOneBot/LuckyLilliaBot/releases) 下载发行包到本机 `data/` |
+| NapCat | 自定义（见其仓库） | 备选协议端；同上，从 [官方 Releases](https://github.com/NapNeko/NapCatQQ/releases) 下载 |
 
 ## 运行时依赖（随发布包）
 

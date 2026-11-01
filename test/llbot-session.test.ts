@@ -317,16 +317,24 @@ test('LLBotManager: 掉线看门狗——在线转离线记因，扫码静默期
 
 // ---------------- 有头模式（PMHQ）：启动参数、注入器配置、账号守卫 ----------------
 
-test('LLBotManager: 有头模式没设预期 bot 账号就拒绝启动（否则可能顶着别的号发言）', async () => {
+test('LLBotManager: 没设预期 bot 账号也能启动（登哪个就是哪个）', async () => {
   const root = mkdtempSync(join(tmpdir(), 'parallel-pmhq-'));
+  const { mgr } = makeManager(root, { mode: 'pmhq', expectedQq: '' });
   try {
-    const { mgr } = makeManager(root, { mode: 'pmhq', expectedQq: '' });
+    // 发行包就位（免下载）+ 本机 QQ 进程盘点放行 + spawn 换成空操作：
+    // 这里只验证「预期账号这道闸没了」，进程真拉起不在测试范围内
+    writeFileSync(join(root, 'llbot', 'llbot.exe'), '');
+    (mgr as unknown as { probeQqProcesses(): Promise<{ total: number; ours: number } | null> }).probeQqProcesses = async () => ({ total: 0, ours: 0 });
+    (mgr as unknown as { spawn(home: string): void }).spawn = () => {};
     await mgr.start();
     const st = mgr.status() as Record<string, unknown>;
-    assert.equal(st.running, false, '不该拉起任何进程');
-    assert.equal(st.mode, 'pmhq');
-    assert.match(String(st.error), /预期 bot 账号/);
-  } finally { rmSync(root, { recursive: true, force: true }); }
+    assert.equal(st.running, false, 'spawn 已是空操作');
+    assert.equal(st.error, '', '不再有「预期 bot 账号」这道闸');
+    assert.ok(existsSync(join(root, 'llbot', 'bin', 'pmhq', 'pmhq_config.json')), '越闸后走到 PMHQ 配置写入');
+  } finally {
+    await mgr.stop().catch(() => {});
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('LLBotManager: 有头模式写 PMHQ 配置（QQ 路径 / 自动登录号 / 鉴权 / 独立档案）', () => {

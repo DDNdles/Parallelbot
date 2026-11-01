@@ -100,9 +100,8 @@ const RHYTHM_MODES: PillOpt[] = [
   { v: 'balanced', t: '平衡（加语气与字数判据）' },
   { v: 'aggressive', t: '激进（更早触发）' },
 ];
-/** 协议端三档：名字与内核 deps 的 END_INFO 对齐（SnowLuma 为默认档） */
+/** 协议端两档：名字与内核 deps 的 END_INFO 对齐（默认 LLBot 有头） */
 const END_OPTS: PillOpt[] = [
-  { v: 'snowluma', t: 'SnowLuma' },
   { v: 'llbot', t: 'LuckyLillia' },
   { v: 'napcat', t: 'NapCat' },
 ];
@@ -338,7 +337,7 @@ export default function SettingsPage() {
 
               <div className="mset-field">
                 <label className="mset-flabel">协议端</label>
-                <PillSelect align="left" value={protocol || 'snowluma'} label="协议端"
+                <PillSelect align="left" value={protocol || 'llbot'} label="协议端"
                   options={END_OPTS} onChange={(v) => void switchEnd(v)} />
                 <div className="plg-hint">切换即时生效：停旧端、起新端；首次用某档会先下发行包，稍等再点「检测」</div>
               </div>

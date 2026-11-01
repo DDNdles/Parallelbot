@@ -24,8 +24,8 @@ interface LoginStatus {
   /** 预期 bot 账号 + 账号守卫结果（登录号与它不符时内核已停止代发） */
   expectedQq?: string;
   accountBlocked?: { got: string; expected: string };
-  /** 当前托管协议端（LLBot / NapCat / SnowLuma）与其登录态守护字段 */
-  protocol?: 'llbot' | 'napcat' | 'snowluma';
+  /** 当前托管协议端（LLBot / NapCat）与其登录态守护字段 */
+  protocol?: 'llbot' | 'napcat';
   end?: {
     running: boolean; webuiUrl: string; downloaded: boolean; hasToken?: boolean; error?: string;
     mode?: 'pmhq' | 'direct'; qqProfile?: string; expectedQq?: string;
@@ -49,8 +49,6 @@ export default function LoginGate({ onEnter, onToggleTheme }: {
   const [stateCls, setStateCls] = useState('');
   const [opening, setOpening] = useState(false);
   const [avOK, setAvOK] = useState(true);
-  /** 首次登录时内联收集预期 bot 账号：设置页在门后面够不着，没有它有头模式永远拒绝启动 */
-  const [qqDraft, setQqDraft] = useState('');
   const timers = useRef<ReturnType<typeof setInterval | typeof setTimeout>[]>([]);
   const enteredRef = useRef(false);
   useEffect(() => { setAvOK(true); }, [info?.qq]);   // 换号后重新试头像
@@ -197,28 +195,9 @@ export default function LoginGate({ onEnter, onToggleTheme }: {
         {online ? (
           <button id="login-enter" className="login-btn" onClick={commitEnter}>进入控制台</button>
         ) : (
-          <>
-            {/* 预期账号没登记过（全新机器常态）：有头模式没它拒绝启动，先在这儿收 —— 登录门挡着，设置页够不着 */}
-            {!blocked && info && !info.expectedQq && (
-              <div className="login-qqrow">
-                <input className="login-qq-in mono" placeholder="本 bot 的 QQ 号" value={qqDraft}
-                  inputMode="numeric" maxLength={12} spellCheck={false}
-                  onChange={(e) => setQqDraft(e.target.value.replace(/\D/g, ''))} />
-                <button className="login-btn login-btn-sm" disabled={qqDraft.trim().length < 5} onClick={async () => {
-                  try {
-                    await post('/api/config', { expectedQq: qqDraft.trim() });
-                    await openQqnt();
-                  } catch (e) {
-                    setStateMsg(`保存失败：${(e as Error).message}`);
-                    setStateCls('err');
-                  }
-                }}>保存并打开</button>
-              </div>
-            )}
-            <button id="login-qqnt" className="login-btn" disabled={opening} onClick={openQqnt}>
-              {opening ? '正在打开…' : '打开 QQNT'}
-            </button>
-          </>
+          <button id="login-qqnt" className="login-btn" disabled={opening} onClick={openQqnt}>
+            {opening ? '正在打开…' : '打开 QQNT'}
+          </button>
         )}
 
         <label className="login-auto"><input type="checkbox" id="login-auto-chk" /><span>自动登录，下次直接进入</span></label>
