@@ -179,8 +179,8 @@ npm start           # 启动内核（原生运行 TS 源码，要求 Node ≥ 24
 
 | 协议端 | 形态 | 托管支持 | 适用场景 |
 | :--- | :--- | :---: | :--- |
-| **LuckyLilliaBot (LLBot)** | 有头 PMHQ 注入 QQNT | **✅ Windows 自动下载 + 看门狗守护** | **官方推荐**。稳定性高，完美兼容真 QQ 表情与文件收发。 |
-| **NapCat** | 引导注入 QQNT | **✅ Windows 自动下载 + 守护** | 备选方案，支持 WebUI 注入。 |
+| [**LuckyLilliaBot (LLBot)**](https://github.com/LLOneBot/LuckyLilliaBot) | 有头 PMHQ 注入 QQNT | **✅ Windows 自动下载 + 看门狗守护** | **官方推荐**。稳定性高，完美兼容真 QQ 表情与文件收发。 |
+| [**NapCat**](https://github.com/NapNeko/NapCatQQ) | 引导注入 QQNT | **✅ Windows 自动下载 + 守护** | 备选方案，支持 WebUI 注入。 |
 | **通用 OneBot 11** | 反向 WebSocket | — | Linux / macOS 容器化或自建协议端环境，指向 `ws://127.0.0.1:3001/onebot`。 |
 
 ### 模型兼容性（由 `@earendil-works/pi-ai` 驱动）
@@ -251,8 +251,8 @@ flowchart TB
 Parallelbot 的构建离不开优秀开源社区的基石：
 
 - [**pi**](https://github.com/earendil-works/pi)（Pi Agent Harness）— 优雅克制的 Agent 循环与统一模型层引擎，本项目的底层基石
-- [**HDS-Interlude**](https://github.com/aliao0124/HDS-Interlude) — 拟人层行动容量与节奏判据的设计启蒙（AGPL-3.0，逐行移植声明详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)）
-- [**LuckyLilliaBot (LLBot)**](https://github.com/LuckyLilliaTeam/LLBot) & [**NapCat**](https://github.com/NapNeko/NapCat) — 卓越稳健的 QQ 协议基础设施
+- [**HDS-Interlude**](https://github.com/REcklessNOLOve117/HDS-Interlude) — 拟人层行动容量与节奏判据的设计启蒙（AGPL-3.0，逐行移植声明详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)）
+- [**LuckyLilliaBot (LLBot)**](https://github.com/LLOneBot/LuckyLilliaBot) & [**NapCat**](https://github.com/NapNeko/NapCatQQ) — 卓越稳健的 QQ 协议基础设施
 - [**MaiBot**](https://github.com/MaiM-with-u/MaiBot) & [**AstrBot**](https://github.com/AstrBotDevs/AstrBot) — 拟人化参数与群聊交互的优秀探索
 - [**Next.js**](https://nextjs.org/) & [**Tailwind CSS**](https://tailwindcss.com/) — 桌面端现代化交互架构
 
