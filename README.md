@@ -11,8 +11,8 @@
 日常在群里和私聊中，它是有温度、懂节律、甚至被插话会瞬间闭嘴的真实群友；  
 一旦 @ 交代任务，它即刻化身全能工程师：在物理隔离的 Docker 沙箱里调度代码、协同子代理，并将产物直接以文件发回。
 
-[![CI](https://github.com/DDNdles/parallel/actions/workflows/ci.yml/badge.svg)](https://github.com/DDNdles/parallel/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/DDNdles/parallel?color=blue)](https://github.com/DDNdles/parallel/releases)
+[![CI](https://github.com/DDNdles/Parallelbot/actions/workflows/ci.yml/badge.svg)](https://github.com/DDNdles/Parallelbot/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/DDNdles/Parallelbot?color=blue)](https://github.com/DDNdles/Parallelbot/releases)
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-orange)](LICENSE)
 [![node >= 24](https://img.shields.io/badge/node-%3E%3D24-brightgreen)](package.json)
 [![tests: 470+](https://img.shields.io/badge/tests-470%2B-green)](test)
@@ -94,7 +94,7 @@
 
 ```bash
 # 从 Releases 下载最新 tgz 包并全局安装：
-npm i -g https://github.com/DDNdles/parallel/releases/download/v0.3.0/ddnoodles-parallel-0.3.0.tgz
+npm i -g https://github.com/DDNdles/Parallelbot/releases/download/v0.3.0/ddnoodles-parallel-0.3.0.tgz
 
 # 在任意目录下启动（运行时数据自动保存在当前目录下的 ./data）
 parallel
@@ -104,18 +104,18 @@ parallel
 
 ```powershell
 # 自动下载 Node 运行时，安装至 %LOCALAPPDATA%\Programs\parallel 并配置好用户环境变量与开始菜单快捷方式：
-irm https://raw.githubusercontent.com/DDNdles/parallel/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/DDNdles/Parallelbot/main/scripts/install.ps1 | iex
 ```
 
 ### 方式 C：绿色免安装包（解压即跑）
 
-1. 从 [GitHub Releases](https://github.com/DDNdles/parallel/releases) 下载 `parallel-vX.Y.Z.zip`。
+1. 从 [GitHub Releases](https://github.com/DDNdles/Parallelbot/releases) 下载 `parallel-vX.Y.Z.zip`。
 2. 解压到任意目录，双击运行 `parallel.cmd` 即可启动（内置独立 Node 运行时与全部依赖）。
 
 ### 方式 D：克隆源码开发
 
 ```bash
-git clone https://github.com/DDNdles/parallel.git
+git clone https://github.com/DDNdles/Parallelbot.git
 cd parallel
 
 npm install         # 安装依赖（运行时核心仅依赖 ws 与 pi agent runtime）
