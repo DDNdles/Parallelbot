@@ -1,293 +1,266 @@
 <div align="center">
 
-<img src="logos/parallel-logo-final.svg" width="128" alt="parallel logo" />
+<img src="logos/parallel-logo-final.svg" width="128" alt="Parallelbot logo" />
 
-# parallel —— harness 形态的 QQ 机器人
+# Parallelbot
 
-**一个可接入 LLM 的 agent loop 内核，通过它掌控一个 QQ 账号，不只聊天**——在群聊和私信里像个真人一样活着。
-QQ 接入只是它的一种通道：协议适配本身也是插件形态，将来可以同一内核换接其他通道。
+### 聊天与工作并行，拟人与沙箱共生 —— 新一代 QQ Agent 运行时
+
+**Parallel, Not Just a Bot.**  
+打破传统机器人“只会机械问答”或“只能闲聊刷屏”的刻板印象。  
+日常在群里和私聊中，它是有温度、懂节律、甚至被插话会瞬间闭嘴的真实群友；  
+一旦 @ 交代任务，它即刻化身全能工程师：在物理隔离的 Docker 沙箱里调度代码、协同子代理，并将产物直接以文件发回。
 
 [![CI](https://github.com/DDNdles/parallel/actions/workflows/ci.yml/badge.svg)](https://github.com/DDNdles/parallel/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/DDNdles/parallel?color=blue)](https://github.com/DDNdles/parallel/releases)
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-orange)](LICENSE)
 [![node >= 24](https://img.shields.io/badge/node-%3E%3D24-brightgreen)](package.json)
 [![tests: 470+](https://img.shields.io/badge/tests-470%2B-green)](test)
+[![Docker Sandbox](https://img.shields.io/badge/sandbox-Docker%20Isolated-blue)](docker)
 
 </div>
 
-> **一切皆插件**：角色化聊天、沙箱、搜索、表情包……全部是热插拔插件；内核只保留 agent loop、Pipeline、服务容器与插件运行时
->
-> **不只聊天**：除了基本的聊天功能，parallel还提供了工作能力，可以在沙箱进行自动化编码或agent任务
+---
+
+## ⚡ 为什么叫 Parallelbot？
+
+> **Parallel（并行）** 不仅是它的名字，更是它的底层哲学：
+
+| 并行维度 | 核心表现 |
+| :--- | :--- |
+| **💬 闲聊与工作并行 (Chat & Work)** | 摸鱼闲聊与重型任务互不干扰。在群内插科打诨的同时，后台静默拉起容器跑代码，产物直发，互不抢占。 |
+| **👥 主代理与子代理并行 (Delegation)** | 面对复杂工程或调研，任务通过 `delegate` 自动分拆给专职子代理（Research / Data / Coding），多线协同推进。 |
+| **⛓️ 聊天与工作模型链并行 (Dual-Chain)** | 聊天链与工作链彻底解耦，独立配置供应商、模型与思考强度；各自维护故障转移降级队列，高可用永不掉线。 |
+| **🎭 前台拟人与后台掌控并行 (Humanlike & Control)** | QQ 端体验极度自然（分句气泡、打断即停、真表情交互）；桌面端提供 **14 个 Next.js 极客管理面板**，全局状态一览无余。 |
+
+---
+
+## 📸 实机体验
+
+<table>
+  <tr>
+    <td align="center" width="56%">
+      <img src="docs/screenshots/humanlike-chat.jpg" alt="拟人化私聊" width="460" /><br/>
+      <b>💬 拟人化闲聊</b><br/>
+      <sub>真实打字节律 · 仿人类分句气泡 · 插话瞬间打断 · 接梗与吐槽</sub>
+    </td>
+    <td align="center" width="44%">
+      <img src="docs/screenshots/work-dispatch.jpg" alt="群里派活" width="310" /><br/>
+      <b>🛠️ 群内零门槛派活</b><br/>
+      <sub>自然语言 @ 即可派单 · 独立沙箱执行 · 产物直接打包发回</sub>
+    </td>
+  </tr>
+</table>
+
+<div align="center">
+  <img src="docs/screenshots/work-activity.png" alt="工作活动流" width="920" /><br/>
+  <b>🖥️ 桌面端 Live Activity Stream</b><br/>
+  <sub>逐行实时透视模型思考链、Shell 终端、文件读写与子代理协作，按发起人与任务清晰归档</sub>
+</div>
+
+---
+
+## 🚀 双轨核心能力
+
+### 轨一：像真人一样生活（Humanlike Chat）
+
+告别传统机器人的“问一句答一句”与“客服味道歉”，Parallelbot 拥有独立的社交呼吸感：
+
+- **会呼吸的开口判定**：基于 `frequency` 门槛机制，不抢话、不复读。结合群聊活跃度动态积累发言冲动，长时间无人互动时具备指数退避，深更半夜遵循昼夜生理节律。
+- **纯程序分句气泡**：不是丢出一大坨格式化 Markdown，而是由程序按句子切分、模拟人类打字速度逐条发送，真实还原群友聊天的碎碎念体验。
+- **🚨 核心特性：被插话瞬间打断**：在逐条发出气泡的过程中，如果对方突然发来新消息，系统会即刻掐断剩余未发出的气泡，且未发内容绝不上屏、不入历史。真人聊天时的“被打断就闭嘴”，在此成为现实。
+- **真 QQ 表情全链路**：收到群友表情时自动转码为视觉输入理解语义；发送时可自然触发真 QQ 表情段，支持贴表情（React）表态与双击头像戳一戳（Poke）。
+- **Canon 与 Overlay 演化记忆**：内置经典人格内核，配合动态演化层。群友的外号、群内专属黑话、长期的互动关系会自然沉淀在本地记忆中。
+
+### 轨二：像工程师一样交付（Sandbox Work）
+
+不只是在聊天框里敲出伪代码，Parallelbot 能真枪实弹跑通任务：
+
+- **无命令负担**：告别 `/work`、`/exec` 等刻板指令。群友或管理员只需 @bot 说出需求（“帮我写个分析某股票行情的图表页面并生成报告”），即可触发 `work_dispatch`。
+- **Docker 强隔离沙箱**：执行完全运行在隔离容器内，按会话严格划分独立工作区。内置 Python、Node.js、LaTeX (`xelatex` / `ctex` / `tikz`)、Poppler、Pandas 等科学计算与排版工具栈。
+- **专职子代理矩阵**：支持多层子代理分工：
+  - `work`：工程主控，编排流程与收敛产物
+  - `research`：联网深度调研与事实核查
+  - `data`：清洗、统计与图表绘制
+- **真实文件闭环交付**：任务结束后，生成的网页（HTML）、报告（PDF）、表格（Excel）或源码归档，将直接以 **真 QQ 文件消息** 逐条发回群聊或私聊，点开即用。
 
 ---
 
 ## ⚡ 快速开始
 
-四种安装路线，任选其一（npm 包与 zip 自带构建好的桌面端，装完即用；克隆开发才需要自己 build）：
+提供四种起步方式，根据你的使用习惯自由选择（包内均已内置编译好的桌面端，开箱即用）：
+
+### 方式 A：npm 全局安装（推荐，需自备 Node ≥ 24）
 
 ```bash
-# ── 方式一：npm 装 tgz（推荐；需自备 Node ≥ 24）────────
-# 到 Releases 复制 ddnoodles-parallel-vX.Y.Z.tgz 的下载地址后：
+# 从 Releases 下载最新 tgz 包并全局安装：
 npm i -g https://github.com/DDNdles/parallel/releases/download/v0.3.0/ddnoodles-parallel-0.3.0.tgz
-parallel              # 在任意目录启动；数据落在当前目录 ./data
 
-# ── 方式二：PowerShell 一键安装（零依赖）───────────────
-# 自带 Node 运行时，装到 %LOCALAPPDATA%\Programs\parallel 并加入用户 PATH + 开始菜单：
-irm https://raw.githubusercontent.com/DDNdles/parallel/main/scripts/install.ps1 | iex
-
-# ── 方式三：绿色版 zip（零依赖，不想碰命令行就走这条）──
-# 从 Releases 下载 parallel-vX.Y.Z.zip，解压后双击 parallel.cmd
-# （包内自带 node_modules 与 Node 运行时，解压即用，无任何前置）
-
-# ── 方式四：克隆开发 ───────────────────────────────────
-git clone https://github.com/DDNdles/parallel.git && cd parallel
-npm install        # 运行时依赖只有 ws + pi 的 agent runtime
-npm run build      # 桌面端：Next 静态导出到 ui/（克隆后要先构建一次）
-npm start          # = node bin/parallel.js（内核直接运行 TS 源码，要求 Node ≥ 24）
+# 在任意目录下启动（运行时数据自动保存在当前目录下的 ./data）
+parallel
 ```
 
-启动后打开桌面端 <http://127.0.0.1:3080>——令牌不用手填，内核启动时自动打开浏览器并带上 `#token=<uiToken>`。
+### 方式 B：PowerShell 一键安装（Windows 零依赖）
 
-- **第一次跑会先停在「环境检查」页**：探测 Node / 数据目录可写 / QQNT / 协议端发行包 / Docker / Python / Bash / ffmpeg。第三方软件只给官方下载页链接——parallel 不替人装软件；协议端发行包是唯一点一下就能由内核自己下的（官方源优先，下载后校验官方 SHA256）。Docker/Python/Bash 缺失只影响 work 模式，只聊天可以点「跳过」直接进
+```powershell
+# 自动下载 Node 运行时，安装至 %LOCALAPPDATA%\Programs\parallel 并配置好用户环境变量与开始菜单快捷方式：
+irm https://raw.githubusercontent.com/DDNdles/parallel/main/scripts/install.ps1 | iex
+```
 
-### 接入真机
+### 方式 C：绿色免安装包（解压即跑）
 
-1. 选协议端：默认使用llbot，无需其他操作。**内嵌托管只支持 Windows**（自动下载发行包、预写反向 WS 配置、拉起并守护）；macOS/Linux 上内核本身可跑，但请自行运行 OneBot 11 协议端并指向内核
-2. 在弹出的 QQ 窗口扫码登录账号——登哪个号，bot 就是哪个号（想锁号防顶号可在设置页「QQ 接入」的「账号」里填预期 QQ，属可选）
-4. 在桌面端「用户」页的权限名单里配置主人 QQ（`masterIds`）
+1. 从 [GitHub Releases](https://github.com/DDNdles/parallel/releases) 下载 `parallel-vX.Y.Z.zip`。
+2. 解压到任意目录，双击运行 `parallel.cmd` 即可启动（内置独立 Node 运行时与全部依赖）。
 
-## ✨ 特性
+### 方式 D：克隆源码开发
 
-- **🔌 一切皆插件** — 热插拔、三类来源、四贡献面（tools / userConfig / mcpServers / hooks）、声明式权限门控、崩溃隔离、MCP stdio 客户端
-- **🧠 agent loop 交给 pi** — 轮次推进、工具调度、事件流、上下文压缩全部来自 [`@earendil-works/pi-agent-core`](https://github.com/earendil-works/pi)
-- **🤖 模型层交给 pi-ai** — Chat Completions / OpenAI Responses / Anthropic Messages / Gemini 四种协议全部由 `@earendil-works/pi-ai` 实现；每个模型可单独配思考强度
-- **⛓️ 双优先链自动降级** — 聊天 / 工作各一条独立的「供应商+模型」有序链，连续失败到达阈值自动切下一个
-- **🎭 人格系统** — `canon.json` 一份装 Canon（主角记号/世界/配角/语言）/ Perspective（价值观）/ Voice（语气样例）/ Lore（关键词命中的世界事实）；运行时演化出的稳定变化落 Overlay 层，不动 Canon。内置唯一人格 **鲸鱼娘**
-- **🗣️ 拟人化层** — 开口侧：条数门槛 + 空窗补偿 + 连续不理人指数退避 + 昼夜节奏；出站侧：纯程序按句分条（硬上限 100 字 / 6 条）、气泡期可被插话打断（剩余气泡不发也不进历史）、跟屏复读、重复惩罚与口癖词
-- **🛠️ work 子代理** — chat 面 `work_dispatch` 派活；work 模型在隔离上下文里跑（常驻 Python / 浏览器 / shell / 文件 / 联网），`work_finish` 交回结构化结论，产物由系统直接逐条发文件；还能用 `delegate` 再派专职子代理
-- **📦 Docker 沙箱** — 每会话独立目录（字面 + realpath 双重越界校验、chatKey 消毒）、Python/JS/bash 执行（超时/输出截断/并发帽/频率配额）、TTL 扫盘清理；chat 档断网，work 档联网可开关
-- **💾 记忆** — SQLite + FTS5：按 QQ 号存昵称/事实/拉黑；`search_history` 检索窗口外聊天记录；表达学习只学本群说法
-- **🖥️ 桌面端管控 UI** — Next.js 15 静态导出、内核自托管：黑白双主题、会话流 + 工作抽屉 + 日轨回看、打断按钮、全站品牌光标；14 个页面覆盖全部操控面，与 QQ 侧共享同一份状态（REST + WebSocket）
-- **😀 QQ 表情全链路** — 入站表情图转 WebP 喂模型、出站 `[表情/微笑]` 发真 face 段、贴表情回应（react）、戳一戳（poke）；版权表情图不随仓库分发，运行时从本机协议端发行包转码生成
-- **🔎 内置插件 9 个** — bilibili / chat / imagegen / sandbox / skills / sticker / web-search / work（其中 5 个为底座、不在插件页显示）
-- **🔒 本地优先** — 无遥测、无云同步，全部数据在你手边的 `data/` 目录（见[隐私](#隐私)）
+```bash
+git clone https://github.com/DDNdles/parallel.git
+cd parallel
 
-## 🖼️ 截图
+npm install         # 安装依赖（运行时核心仅依赖 ws 与 pi agent runtime）
+npm run build       # 构建桌面端（Next.js 静态导出至 ui/）
+npm start           # 启动内核（原生运行 TS 源码，要求 Node ≥ 24）
+```
 
-<table>
-  <tr>
-    <td align="center" width="62%"><img src="docs/screenshots/humanlike-chat.jpg" alt="拟人化私聊" width="500" /><br/><b>拟人化</b> — 私聊里像个真人：分段气泡、接梗抬杠</td>
-    <td align="center" width="38%"><img src="docs/screenshots/work-dispatch.jpg" alt="群里派活" width="225" /><br/><b>工作</b> — 群里 @ 一句就派活：应下、写完，HTML 文件直接发回群里</td>
-  </tr>
-</table>
+---
 
-<div align="center">
-  <img src="docs/screenshots/work-activity.png" alt="工作活动流" /><br/>
-  <b>工作活动流</b> — 桌面端看思考/工具/终端逐行动作，按发起人分栏
-</div>
+## 🔌 接入与首次配置
 
-## 🔌 已支持的协议端与模型供应商
+内核启动后会自动拉起浏览器打开本地管控台：`http://127.0.0.1:3080#token=<uiToken>`。
 
-### 协议端（任选其一，都以 OneBot 11 反向 WS 连回内核）
+```
+                       ┌────────────────────────────────┐
+                       │   Parallelbot 启动 & 自动开箱    │
+                       └───────────────┬────────────────┘
+                                       │
+                                       ▼
+                       ┌────────────────────────────────┐
+                       │    第一步：环境与依赖自检       │
+                       │ （一键下载协议端 / 校验系统依赖）│
+                       └───────────────┬────────────────┘
+                                       │
+                                       ▼
+                       ┌────────────────────────────────┐
+                       │    第二步：扫码登录 QQ 账号     │
+                       │ （有头模式寄生 QQNT，稳定防风控）│
+                       └───────────────┬────────────────┘
+                                       │
+                                       ▼
+                       ┌────────────────────────────────┐
+                       │    第三步：填入 API Key 即刻起航 │
+                       │ （聊天/工作双优先链自由指定模型） │
+                       └────────────────────────────────┘
+```
 
-| 协议端 | 接入方式 | 内核托管 | 说明 |
-|--------|----------|----------|------|
-| **LuckyLilliaBot**（默认） | 有头 PMHQ 注入本机 QQNT | ✅ Windows 自动下载 + 守护 | 官方文档明示无头模式有掉线风险，有头是稳的那条路；账号守卫可选 |
-| **NapCat** | 引导注入本机 QQNT | ✅ Windows 自动下载 + 守护 | 登录在 QQ 窗口完成；WebUI token 由内核固定注入 |
-| 任意 OneBot 11 端 | 反向 WS 指向 `ws://127.0.0.1:3001/onebot` | — | macOS / Linux 或自带协议端的场景，accessToken 强制鉴权 |
+1. **环境检查**：首次进入会展示环境看板。协议端（LuckyLilliaBot）可一键自动下载并校验官方哈希。Docker / Python 等仅在开启重度 Work 模式时需要，普通闲聊可直接跳过。
+2. **扫码上线**：协议端默认采用 **LuckyLilliaBot（PMHQ 有头注入）** 方案，寄生于本机官方 QQNT，扫码直接登录你准备的 Bot 账号，免除掉线风控困扰。
+3. **权限与模型**：在桌面端「用户」页将你的主号设为 `masterIds`，在「模型」页填入你的 LLM API Key，即刻完成部署！
 
-### 模型连接方式（全部由 pi-ai 实现，内核只做配置与降级）
+---
 
-| 协议 | 典型供应商 | 备注 |
-|------|-----------|------|
-| Chat Completions（OpenAI 兼容） | DeepSeek、Qwen、GLM、各种自建网关 | 填 baseUrl + key 即用 |
-| OpenAI Responses | OpenAI | |
-| Anthropic Messages | Anthropic / Claude | |
-| Gemini 原生 | Google Gemini | baseUrl 末段 `/v1` 自动归到 `/v1beta` |
+## 🎛️ 桌面端 14 联装极客控制台
 
-> 供应商不区分用途：聊天链（`llm.chatChain`）与工作链（`llm.workChain`）各自有序列「供应商 + 模型」，靠前的优先，掉线自动接后一个；两条链互相独立、互不跟随。
+拒绝把配置埋在复杂的命令行参数或黑盒 JSON 里。Parallelbot 随内核自托管了一套由 **Next.js 15** 驱动的纯净桌面端，沿用极简黑白主题与品牌光标交互：
 
-### 内置插件
+- 💬 **会话监控流**：实时查看全部群聊与私聊进出站报文、状态标记、手动打断与一键插话。
+- 📊 **工作任务抽屉**：可视化跟踪所有 Work 任务的执行状态、活动脊线、Token 消耗与产物文件库。
+- 🤖 **模型链编排**：聊天链（`llm.chatChain`）与工作链（`llm.workChain`）独立编排，可为不同模型设置不同的思考强度。
+- 📦 **沙箱与存储**：会话文件管理器、过期自动清理（TTL Sweep）、运行配额与网络出网权限开关。
+- 🗣️ **拟人与语气调优**：开口条数门槛、打断概率、分群语气学习库增删管理。
+- 🛡️ **报错中心与风控**：全链路错误透明回溯、频控计费与拉黑名单硬闸拦截。
+- 💾 **即时持久化**：全站所有开关、拖拽条与输入框均支持无感自动保存（即存/防抖落盘），无需手动找保存按钮。
 
-| 插件 | 能力 | 形态 |
-|------|------|------|
-| chat | 角色化聊天、人格、表达学习、贴表情/戳一戳 | core |
-| work | work 派活/进度/交付的 chat 面工具 | core |
-| sandbox | 沙箱文件工具面（读/写/编辑/检索/执行） | core |
-| skills | 目录式技能库（只给 work 入口） | core |
-| web-search | Tavily 搜索 + `web_fetch`（拦内网/环回/元数据地址） | core |
-| bilibili | B 站视频搜索与链接解析 | 可开关、分群 |
-| imagegen | 文生图 / 参考图生图，产物落会话沙箱 | 可开关、分群 |
-| sticker | 表情包收录与检索（收录时模型看图打 desc/tags） | 可开关、分群 |
+---
 
-## 🆚 为什么选 parallel？
+## 🧩 协议与生态矩阵
 
-同类项目解决的是「让 bot 动起来」，parallel 解决的是「让 bot 像个有身份的人活着，并且你全程看得见、管得住」。
+### 协议端接入
 
-| 维度 | 命令式 bot 框架 | 拟人化群 bot | **parallel** |
-|------|----------------|--------------|--------------|
-| 核心形态 | 指令/事件注册分发 | LLM 聊天为主 | **agent loop 内核 + 一切皆插件** |
-| 桌面端管控 | 无或仅日志页 | 简单配置页 | **14 页全操控面**：会话流、工作抽屉、日轨回看、报错中心 |
-| 复杂任务 | 自己写插件 | 少数带工具 | **work 子代理**：Docker 沙箱、可再派子代理、结构化交付、产物直接发文件 |
-| 拟人化 | 无 | 有（多为打分/剧本） | frequency 门槛 + 空窗补偿 + 退避；**出站纯程序分条、可被打断** |
-| 模型容灾 | 自己接 | 单模型居多 | **双优先链自动降级** + 每模型思考强度 + 用量账 |
-| 免真号测试 | 无 | 无 | **模拟协议端 E2E + 桌面端 bot 发言**，470+ 项测试 |
-| 权限模型 | 无/自实现 | 简单白名单 | 主人>管理员>普通用户，**工具层硬拒**（不靠提示词自觉）+ 按可见面切分工具 |
+| 协议端 | 形态 | 托管支持 | 适用场景 |
+| :--- | :--- | :---: | :--- |
+| **LuckyLilliaBot (LLBot)** | 有头 PMHQ 注入 QQNT | **✅ Windows 自动下载 + 看门狗守护** | **官方推荐**。稳定性高，完美兼容真 QQ 表情与文件收发。 |
+| **NapCat** | 引导注入 QQNT | **✅ Windows 自动下载 + 守护** | 备选方案，支持 WebUI 注入。 |
+| **通用 OneBot 11** | 反向 WebSocket | — | Linux / macOS 容器化或自建协议端环境，指向 `ws://127.0.0.1:3001/onebot`。 |
 
-## 🏗️ 工作原理
+### 模型兼容性（由 `@earendil-works/pi-ai` 驱动）
+
+内核原生支持全球主流模型接口，填入 BaseURL 与 API Key 即可使用：
+
+- **OpenAI 兼容 / Chat Completions**（DeepSeek、Qwen、GLM、Moonshot、MiniMax、Ollama 及各类反向代理）
+- **OpenAI Responses** 原生协议
+- **Anthropic Messages**（Claude 3.5 Sonnet / Haiku / Opus）
+- **Google Gemini** 原生接口（支持流式、函数调用与视觉直通）
+
+---
+
+## 🏗️ 系统架构
 
 ```mermaid
 flowchart TB
-    QQS["QQ 服务器"] <--> PROTO["协议端（LLBot / NapCat）<br/>OneBot 11 反向 WS"]
-    PROTO -- "入站事件" --> PIPE["Pipeline<br/>拉黑闸 · 隐藏收口 · 限速"]
-    PIPE --> GATE["拟人层 frequency<br/>条数门槛 · 空窗补偿 · 退避"]
-    GATE --> LOOP["Agent Loop（pi-agent-core）<br/>system 分节 + 历史 + 工具调度"]
-    LOOP <--> LLM["模型层（pi-ai）<br/>双优先链 · 自动降级"]
-    LOOP <--> PLUG["插件工具面<br/>chat / work / sandbox / search …"]
-    LOOP -- "出站回复" --> DELIV["纯程序按句分条<br/>气泡期可被打断"] --> PROTO
-    UI["桌面端 UI 127.0.0.1:3080"] -- "REST + WebSocket（同一份状态）" --> PIPE
+    subgraph 外界接入
+        QQS["QQ 官方服务器"] <--> PROTO["OneBot 11 协议端<br/>（LLBot / NapCat）"]
+        UI_CLIENT["桌面控制台 UI<br/>（Next.js 15 静态导出）"]
+    end
+
+    PROTO -- "入站 WS 事件" --> PIPE["Pipeline 安全流水线<br/>拉黑硬拦截 · 隐藏收口 · 频率流控"]
+    UI_CLIENT <== "REST API + Event WS" ==> PIPE
+
+    PIPE --> GATE{"拟人开口网关 (Frequency)<br/>条数门槛 · 空窗补偿 · 活跃退避"}
+    
+    GATE -- "满足条件" --> LOOP["Agent Loop 核心引擎<br/>（@earendil-works/pi-agent-core）"]
+    
+    subgraph 核心双核
+        LOOP <--> LLM["pi-ai 模型路由<br/>Chat 链 / Work 链独立降级"]
+        LOOP <--> PLUGS["热插拔插件生态<br/>chat / work / sticker / bilibili / web-search"]
+        LOOP -. "派发任务" .-> WORK_SUB["Work 隔离引擎<br/>（Docker 沙箱 + 专职子代理）"]
+    end
+
+    LOOP -- "出站文本流" --> OUT["纯程序打字分句器<br/>（按句切分 · 节奏气泡 · 插话打断）"]
+    OUT --> PROTO
+    WORK_SUB -- "结构化交付 (产物文件)" --> PROTO
 ```
 
-1. **入站**：协议端把 QQ 消息经反向 WS 推给内核，Pipeline 先过拉黑闸与限速
-2. **开口判定**：拟人层按 frequency 决定这一批要不要理——攒够 `pendingThreshold` 条、或空窗补偿、或被 @ 必回；连续不理人则指数退避
-3. **组装上下文**：人格 canon + Overlay 演化层 + 插件分节 + 工具自带规则进 system；历史按「10 分钟时间窗 + 条数上限」双约束投影，超窗交给 pi 的压缩
-4. **跑 agent loop**：pi-agent-core 推进轮次、调度工具；chat 轮最多两轮，重工具（`surface:'work'`）在 chat 工具列表里根本不存在；work 任务另起隔离上下文，可 `delegate` 子代理
-5. **出站**：回复由纯程序按句分条、句边截断，按打字节奏逐条发出；气泡期间对面再发消息，按概率砍掉剩余气泡（被砍正文不回灌历史）
+---
 
-## 🛡️ 隐私
+## 🛡️ 隐私与安全底线
 
-| 保护 | 细节 |
-|------|------|
-| **本地优先** | 无遥测、无云同步、无账号体系；聊天、记忆、配置、密钥全部落在你指定目录的 `data/`，整目录不入库 |
-| **密钥隔离** | API key / token 只进 `data/secrets.json`；代码默认值与插件清单一律为空，发布包带私钥自检（`npm run pack` 拒绝脏树与密钥残留） |
-| **桌面端只听回环** | 仅监听 `127.0.0.1` 且要求 uiToken；免 token 的 `/api/setup/*`、`/api/login/*` 额外要求回环来源 + 回环 Host + 非跨站 Origin |
-| **出网白名单** | 内核主动出网只有你配置的模型 API、Tavily、插件声明的接口；`web_fetch` 拒绝内网/环回/元数据地址且重定向逐跳复检 |
-| **沙箱边界** | 执行类任务进 Docker（chat 档断网硬化）；文件路径字面 + realpath 双重校验，符号链接指到沙箱外一律拒绝 |
+- **100% 数据归属本地**：完全无外部遥测、无数据上报、无需注册任何第三方云端账号。所有的会话记录、记忆数据库、配置与密钥完整保存在你手边的 `data/` 目录。
+- **密钥物理隔离**：所有的 API Token 仅保存在本地 `data/secrets.json` 中，代码与插件默认值全为空，打包流水线内置密钥扫描机制。
+- **沙箱安全防护**：沙箱文件路径执行字面与 `realpath` 双重越界校验，符号链接试图逃逸至工作区外一律严厉切断；Chat 容器网络默认硬化断网。
+- **本地回环安全**：控制台后端默认仅监听 `127.0.0.1`，敏感接口强制校验专用 `uiToken` 与回环 Origin 来源。
 
-## 📦 配置项
+---
 
-配置在 `data/config.json`（密钥在 `data/secrets.json`），大部分项桌面端「设置」页可改、即时落盘；下面是内核红线级的常用键：
+## 🪪 技术一览
 
-| 键 | 默认 | 说明 |
-|----|------|------|
-| `masterIds` | `[]` | 主人 QQ 白名单（主人专属能力的判据） |
-| `ui.port` / `ui.host` | `3080` / `127.0.0.1` | 桌面端监听地址 |
-| `onebot.port` | `3001` | OneBot 11 反向 WS 服务端口 |
-| `onebot.flavor` | `llbot` | 协议端：`llbot` / `napcat`（改后重启；设置页也可切） |
-| `llm.chatChain` / `llm.workChain` | `[]` | 聊天 / 工作两条优先链（供应商+模型有序列表） |
-| `llm.failoverThreshold` | `2` | 同链连续掉线 N 次才切下一个模型 |
-| `storage.historyLimit` | `200` | 每会话传给模型的近端历史条数 |
-| `storage.contextMinutes` | `10` | 上下文时间窗（分钟），与条数上限同时生效 |
-| `humanlike.timing.pendingThreshold` | `12` | 攒够几条消息才进模型（开口门槛） |
-| `humanlike.timing.onlyReplyWhenAt` | `false` | 仅 @ 后才回复 |
-| `humanlike.outgoing.replyMaxCharacters` | `100` | 单轮回复总长硬上限（提示推荐 50） |
-| `humanlike.outgoing.maxBubbles` | `6` | 出站气泡数硬上限（提示推荐 2~3 条） |
-| `humanlike.interrupt.probability` | `0.8` | 气泡期被插话时砍掉剩余气泡的概率 |
-| `risk.replyRatePerMin` | `12` | 每会话发言上限（条/分钟，按条计费、不够就截断） |
-| `sandbox.runtime` | `auto` | `docker` 强隔离 / `subprocess` 本机 / `auto`（docker 可用则用） |
-| `sandbox.workNetwork` | `true` | work 容器联网开关（chat 档始终断网） |
-| `sandbox.retentionHours` | `72` | 沙箱文件保留期（最后一次访问起算） |
-| `work.maxDepth` | `2` | work → 子代理嵌套深度上限 |
+| 维度 | 实现规范 |
+| :--- | :--- |
+| **运行时** | Node.js ≥ 24（内核直接执行 TypeScript 源码，开发免编译） |
+| **Agent Loop 核心** | [`@earendil-works/pi-agent-core`](https://github.com/earendil-works/pi) |
+| **模型协议抽象** | [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi) |
+| **前端控制台** | Next.js 15 (App Router) + Tailwind CSS + 原生 WebSocket |
+| **持久化引擎** | SQLite (with FTS5 全文搜索) + JSONL 增量会话日志 |
+| **沙箱隔离** | Docker 容器隔离引擎 / 本地多进程回落 |
+| **开源许可证** | **AGPL-3.0-only** |
 
-## 🛠️ 本地开发
+---
 
-```bash
-npm install          # 运行时依赖只有 ws + pi 的 agent runtime
-npm run typecheck    # tsc 类型门禁
-npm test             # 470+ 项：单测 + 模拟协议端 E2E（Node 直跑 TS 源码）
-npm run build        # 桌面端：web/（Next.js 15）静态导出到 ui/
-node scripts/serve-ui.mjs   # 起临时内核预览桌面端
-```
+## 🤝 致谢
 
-```
-bin/parallel.js        启动器（自动带 --experimental-transform-types）
-src/kernel/            内核：总线/配置/存储/报错/限速/调度/会话日志
-src/kernel/services/   LLM / 记忆 / 沙箱 / 发送 / MCP / work 执行器 / 协议端托管
-src/kernel/humanlike/  拟人化层（不在插件体系里）：frequency / delivery / interrupt / …
-src/kernel/adapters/   OneBot 11 反向 WS 适配器
-src/kernel/api/        REST API + 事件 WS + 静态 UI 服务
-src/plugins/           内置插件 9 个；chat 的 personas/ 是内置人格目录
-examples/              示例插件（自建模板，含 MCP server 示例）
-web/                   桌面端源码（Next.js 15 静态导出）
-test/                  单测 + E2E（模拟协议端）
-scripts/               发布打包 / 报文抓取 / 拟人层验收 / 工作工具冒烟
-data/                  运行时数据（不入库）
-```
+Parallelbot 的构建离不开优秀开源社区的基石：
 
-- 内核直接运行 TypeScript 源码（Node ≥ 24 的类型剥离），开发改完 `src/` 重启内核即生效；前端 `npm run build` 后即生效
-- 写新插件照抄 `examples/` 模板：四贡献面（tools / userConfig / mcpServers / hooks）按需声明，权限走声明式门控
-- 发布：`npm run pack` 打 zip（默认要求工作树干净 + 私钥自检）；推 `v*` tag 触发 GitHub Actions 自动出 `.tgz` + `.zip` 双产物 Release
+- [**pi**](https://github.com/earendil-works/pi)（Pi Agent Harness）— 优雅克制的 Agent 循环与统一模型层引擎，本项目的底层基石
+- [**HDS-Interlude**](https://github.com/aliao0124/HDS-Interlude) — 拟人层行动容量与节奏判据的设计启蒙（AGPL-3.0，逐行移植声明详见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)）
+- [**LuckyLilliaBot (LLBot)**](https://github.com/LuckyLilliaTeam/LLBot) & [**NapCat**](https://github.com/NapNeko/NapCat) — 卓越稳健的 QQ 协议基础设施
+- [**MaiBot**](https://github.com/MaiM-with-u/MaiBot) & [**AstrBot**](https://github.com/AstrBotDevs/AstrBot) — 拟人化参数与群聊交互的优秀探索
+- [**Next.js**](https://nextjs.org/) & [**Tailwind CSS**](https://tailwindcss.com/) — 桌面端现代化交互架构
 
-## 🔧 排障
+---
 
-<details>
-<summary><b>CLI / 内核</b></summary>
+<div align="center">
 
-- **「浏览器令牌与内核不匹配」**：重启一次内核，让它重新带 `#token=` 打开浏览器；令牌在 `data/secrets.json` 的 `uiToken`
-- **环境检查页一直拦**：缺必备项就挡在登录门前，这是预期行为；Docker / Python / Bash 只影响 work 模式，只聊天点「跳过」。被拦期间每 3 秒重新探测，装齐自动放行
-- **端口被占**：桌面端 3080、反向 WS 3001，改 `data/config.json` 后重启
+**Parallelbot** —— 聊天时是懂人情世故的赛博群友，工作时是雷厉风行的代码特工。  
+*Star 本项目，一起见证下一代 QQ 机器人的无限可能。*
 
-</details>
-
-<details>
-<summary><b>协议端 / QQ 登录</b></summary>
-
-- **有头模式拒绝启动/拒绝代发**：LLBot 有头模式要求填「账号」做账号守卫——协议端寄生在本机 QQNT 上，登错号会顶掉你本机登录的号
-- **登录被踢（state=168）**：腾讯风控踢会话，parallel 用设备身份钉住 + 看门狗自动重连；频繁掉线请用小号、避免多端互顶
-- **macOS / Linux 连不上协议端**：内嵌托管是 Windows-only（发行包 win-x64、NapCat 要注入本机 QQNT）；其他系统请自行运行任意 OneBot 11 协议端，反向 WS 指向 `ws://127.0.0.1:3001/onebot` 并填 accessToken
-- **QQ 表情图不显示**：表情美术图不随仓库分发（版权），首次运行由内核从本机协议端发行包转码生成到 `data/face/`，缺协议端发行包时该能力缺席
-
-</details>
-
-<details>
-<summary><b>模型 / work</b></summary>
-
-- **群里一个字都不发**：没接模型 / 额度耗尽 / 空输出时内核彻底静默；错误细节进桌面端「报错中心」
-- **模型频繁降级**：看 `llm.failoverThreshold`（默认连续掉线 2 次就切链上下一个）；全链失败才记 error
-- **work 里 pip 装的库下次没了**：一次性容器只有 `/ws` 持久——要装库就在同一条命令里装完即用，或装进 `/ws/.venv`，或用常驻 compute 会话
-
-</details>
-
-## 🪪 项目一览
-
-| | |
-|---|---|
-| 语言/运行时 | TypeScript · Node ≥ 24（内核直跑 TS，不编译） |
-| 模型层 | `@earendil-works/pi-ai`（唯一引擎） |
-| agent loop | `@earendil-works/pi-agent-core` |
-| 桌面端 | Next.js 15 静态导出，内核自托管 |
-| 存储 | SQLite + FTS5 · JSONL 会话日志 · 原子落盘 JSON 配置 |
-| 协议 | OneBot 11 反向 WebSocket |
-| 隔离 | Docker（work 强制、chat 可回落） |
-| 许可 | AGPL-3.0-only |
-
-## ⭐ Star 历史
-
-<a href="https://star-history.com/#DDNdles/parallel&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=DDNdles/parallel&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=DDNdles/parallel&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=DDNdles/parallel&type=Date" />
- </picture>
-</a>
-
-## 🤝 贡献与支持
-
-- 提问题、报 Bug：[GitHub Issues](https://github.com/DDNdles/parallel/issues)
-- 提 PR：先跑 `npm run typecheck && npm test` 全绿
-- 安全漏洞：请勿公开提 issue，直接联系仓库维护者
-- 版本变更记录见 [CHANGELOG.md](CHANGELOG.md)
-
-## 🙏 致谢
-
-- [**pi**](https://github.com/earendil-works/pi)（Pi Agent Harness）— agent loop 与模型层的唯一引擎，本项目的设计蓝本
-- [**HDS-Interlude**](https://github.com/aliao0124/HDS-Interlude) — 拟人层的节奏反定型与行动容量判定判据来源（AGPL-3.0，逐行移植部分见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)）
-- [**MaiBot**](https://github.com/MaiM-with-u/MaiBot) / [**AstrBot**](https://github.com/AstrBotDevs/AstrBot) — 拟人化开口参数的实测基线与参考
-- [**LuckyLilliaBot**](https://github.com/LuckyLilliaTeam/LLBot) 与 [**NapCat**](https://github.com/NapNeko/NapCat) — QQ 协议端
-- [**Next.js**](https://nextjs.org/) — 桌面端框架；[**Tavily**](https://tavily.com/) — 网络搜索
-
-## License
-
-本项目以 [AGPL-3.0-only](LICENSE)（GNU Affero General Public License v3.0）许可发布：自行使用与修改不受限；若把修改后的版本作为网络服务提供或对外分发，需按 AGPL-3.0 提供对应源码。选择该许可证的直接原因：拟人化层 `agency.ts` 的行动容量判定移植自 HDS-Interlude（AGPL-3.0）。
-
-随包第三方组件与借鉴来源见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)；QQ 表情美术图与内置人格立绘等版权素材不随仓库/发布包分发——表情由内核运行时从本机协议端发行包转码生成到 `data/face/`。
+</div>
