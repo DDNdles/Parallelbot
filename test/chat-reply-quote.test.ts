@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -225,6 +226,190 @@ test('引用一份聊天记录：节点正文要跟着进本轮请求', async ()
   } finally {
     mock.close();
     await kernel.shutdown();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// 2026-11-02：引用回查除了本地日志，还要能问协议端。
+// 实测 787 条查不到的引用，短号 100% 都在 LLBot 的 message 表里 —— 它们不是"不存在"，
+// 只是 bot 当时没落账（重启/重登窗口期），本地怎么扫都扫不到。
+test('引用回查兜底：本地没有那条消息时向协议端 get_msg 要原文', async () => {
+  const { Kernel } = await import('../src/kernel/kernel.ts');
+  const dataDir = mkdtempSync(join(tmpdir(), 'parallel-reply-getmsg-'));
+  const kernel = new Kernel({ dataDir, noApi: true });
+  const cfg = kernel.config.config as any;
+  cfg.onebot.port = 30000 + (process.pid % 20000);
+  cfg.providers.mock = {
+    label: 'Mock', model: 'mock-1', enabled: true, baseUrl: '', protocol: 'mock',
+    models: [{ id: 'mock-1', enabled: true }],
+  };
+  cfg.llm.activeProvider = 'mock';
+  cfg.llm.chatChain = [{ provider: 'mock', model: 'mock-1' }];
+  cfg.llm.workChain = [{ provider: 'mock', model: 'mock-1' }];
+  cfg.risk.replyRatePerMin = 10_000;
+  cfg.masterIds = ['10010'];
+  Object.assign(cfg.humanlike.outgoing, {
+    typingBaseDelaySeconds: 0, typingMaxDelaySeconds: 0, typingJitterRatio: 0,
+  });
+  await kernel.boot();
+  const groupId = '9603';
+  kernel.container.setGroupState('chat', groupId, true, '10010');
+  const mock = new MockOneBot(`ws://127.0.0.1:${cfg.onebot.port}/onebot`, kernel.config.secrets.onebotAccessToken);
+  await mock.connect();
+  try {
+    await until(() => String((kernel.adapter as any).status?.()?.selfId ?? ''), 5000, '协议端登录');
+    // 协议端记得那条旧消息（本地日志里没有）
+    mock.setReply('get_msg', {
+      message_id: 816001, message_type: 'group', time: 1793400000,
+      sender: { user_id: 10002, nickname: '老张' },
+      message: [{ type: 'text', data: { text: '昨天说的那句' } }],
+    });
+
+    const provider = (kernel.llm as any).providers.get('mock');
+    mock.sendGroupMessage({
+      groupId: Number(groupId), userId: 10010, text: '这句什么意思', atMe: true,
+      extraSegments: [{ type: 'reply', data: { id: '816001' } }],
+    });
+
+    const asked = await mock.waitForAction('get_msg', 5000);
+    assert.equal(String(asked.params.message_id), '816001', '本地查不到时按消息号问协议端');
+
+    const inbound = await until(
+      () => kernel.sessionLog.tail(groupId, 'group').find((e) => e.type === 'message_in' && (e.text ?? '').includes('816001')),
+      5000, '入站落账',
+    );
+    const quote = (inbound.data as { replyTo?: { userId?: string; nickname?: string; text?: string } }).replyTo;
+    assert.ok(quote, '取回原文后要写成 replyTo 快照');
+    assert.equal(quote!.text, '昨天说的那句');
+    assert.equal(quote!.nickname, '老张', '昵称用被引用消息的发送者');
+    assert.equal(quote!.userId, '10002');
+
+    const call = await until(
+      () => provider.calls.find((c: any) => String(c.usersJoined ?? '').includes('这句什么意思')),
+      8000, '本轮请求',
+    );
+    assert.ok(String(call.usersJoined).includes('昨天说的那句'), `被引用的原文要进请求：${call.usersJoined}`);
+  } finally {
+    mock.close();
+    await kernel.shutdown();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('引用回查兜底：协议端也取不到就保留占位，不编引用内容', async () => {
+  const { Kernel } = await import('../src/kernel/kernel.ts');
+  const dataDir = mkdtempSync(join(tmpdir(), 'parallel-reply-getmsg-fail-'));
+  const kernel = new Kernel({ dataDir, noApi: true });
+  const cfg = kernel.config.config as any;
+  cfg.onebot.port = 30000 + (process.pid % 20000);
+  cfg.providers.mock = {
+    label: 'Mock', model: 'mock-1', enabled: true, baseUrl: '', protocol: 'mock',
+    models: [{ id: 'mock-1', enabled: true }],
+  };
+  cfg.llm.activeProvider = 'mock';
+  cfg.llm.chatChain = [{ provider: 'mock', model: 'mock-1' }];
+  cfg.llm.workChain = [{ provider: 'mock', model: 'mock-1' }];
+  cfg.risk.replyRatePerMin = 10_000;
+  cfg.masterIds = ['10011'];
+  Object.assign(cfg.humanlike.outgoing, {
+    typingBaseDelaySeconds: 0, typingMaxDelaySeconds: 0, typingJitterRatio: 0,
+  });
+  await kernel.boot();
+  const groupId = '9604';
+  kernel.container.setGroupState('chat', groupId, true, '10011');
+  const mock = new MockOneBot(`ws://127.0.0.1:${cfg.onebot.port}/onebot`, kernel.config.secrets.onebotAccessToken);
+  await mock.connect();
+  try {
+    await until(() => String((kernel.adapter as any).status?.()?.selfId ?? ''), 5000, '协议端登录');
+    mock.failAction('get_msg');
+
+    mock.sendGroupMessage({
+      groupId: Number(groupId), userId: 10011, text: '这个呢', atMe: true,
+      extraSegments: [{ type: 'reply', data: { id: '816002' } }],
+    });
+
+    const inbound = await until(
+      () => kernel.sessionLog.tail(groupId, 'group').find((e) => e.type === 'message_in' && (e.text ?? '').includes('816002')),
+      5000, '入站落账',
+    );
+    assert.equal((inbound.data as { replyTo?: unknown }).replyTo, undefined, '取不到就不该编引用内容');
+    assert.ok(String(inbound.text).includes('[回复:816002]'), `占位要保留：${inbound.text}`);
+  } finally {
+    mock.close();
+    await kernel.shutdown();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+// 副作用收益：被引用的是图片时，get_msg 返回的图片要落进沙箱并作为附件交给模型
+// （只给"引用「某人」：[图片]"，模型等于没看见这张图）。
+test('引用旧图：get_msg 取回的图落进沙箱，并作为附件进本轮请求', async () => {
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64',
+  );
+  const srv = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'image/png' });
+    res.end(png);
+  });
+  await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
+  const imgPort = (srv.address() as { port: number }).port;
+
+  const { Kernel } = await import('../src/kernel/kernel.ts');
+  const dataDir = mkdtempSync(join(tmpdir(), 'parallel-reply-getmsg-img-'));
+  const kernel = new Kernel({ dataDir, noApi: true });
+  const cfg = kernel.config.config as any;
+  cfg.onebot.port = 30000 + (process.pid % 20000);
+  cfg.providers.mock = {
+    label: 'Mock', model: 'mock-1', enabled: true, baseUrl: '', protocol: 'mock',
+    models: [{ id: 'mock-1', enabled: true, inputTypes: ['text', 'image'] }],
+  };
+  cfg.llm.activeProvider = 'mock';
+  cfg.llm.chatChain = [{ provider: 'mock', model: 'mock-1' }];
+  cfg.llm.workChain = [{ provider: 'mock', model: 'mock-1' }];
+  cfg.risk.replyRatePerMin = 10_000;
+  cfg.masterIds = ['10012'];
+  Object.assign(cfg.humanlike.outgoing, {
+    typingBaseDelaySeconds: 0, typingMaxDelaySeconds: 0, typingJitterRatio: 0,
+  });
+  await kernel.boot();
+  const groupId = '9605';
+  const chat = { platform: 'qq' as const, type: 'group' as const, chatId: groupId };
+  kernel.container.setGroupState('chat', groupId, true, '10012');
+  const mock = new MockOneBot(`ws://127.0.0.1:${cfg.onebot.port}/onebot`, kernel.config.secrets.onebotAccessToken);
+  await mock.connect();
+  try {
+    await until(() => String((kernel.adapter as any).status?.()?.selfId ?? ''), 5000, '协议端登录');
+    mock.setReply('get_msg', {
+      message_id: 816003, message_type: 'group', time: 1793400000,
+      sender: { user_id: 10002, nickname: '老张' },
+      message: [{ type: 'image', data: { file: 'old.png', url: `http://127.0.0.1:${imgPort}/old.png` } }],
+    });
+
+    const provider = (kernel.llm as any).providers.get('mock');
+    mock.sendGroupMessage({
+      groupId: Number(groupId), userId: 10012, text: '这张旧图是什么', atMe: true,
+      extraSegments: [{ type: 'reply', data: { id: '816003' } }],
+    });
+
+    const inbound = await until(
+      () => kernel.sessionLog.tail(groupId, 'group').find((e) => e.type === 'message_in' && (e.text ?? '').includes('816003')),
+      8000, '入站落账',
+    );
+    const quote = (inbound.data as { replyTo?: { files?: { name: string; rel: string }[] } }).replyTo;
+    assert.ok(quote?.files?.length, '取回的图片要记进引用快照');
+    assert.ok(quote!.files![0].rel.startsWith('inbox/'), quote!.files![0].rel);
+    assert.ok(existsSync(join(kernel.sandbox.root(chat), quote!.files![0].rel)), '图片要真的落进沙箱');
+
+    const call = await until(
+      () => provider.calls.find((c: any) => String(c.usersJoined ?? '').includes('这张旧图是什么')),
+      8000, '本轮请求',
+    );
+    assert.ok((call.media ?? []).includes('image'), `被引用的图要作为附件：${JSON.stringify(call.media)}`);
+  } finally {
+    mock.close();
+    await kernel.shutdown();
+    srv.close();
     rmSync(dataDir, { recursive: true, force: true });
   }
 });

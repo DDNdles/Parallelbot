@@ -6,7 +6,7 @@ import type { ChatService } from './services/chat.ts';
 import type { SandboxService } from './services/sandbox.ts';
 import type { LlmService } from './services/llm.ts';
 import type { MemoryService } from './services/memory.ts';
-import type { SessionLog } from './sessionlog.ts';
+import type { SessionLog, SessionLogEntry } from './sessionlog.ts';
 import type { WorkRunner, WorkRunResult } from './services/work.ts';
 import { workScopeOf, sandboxRefOfKey } from './services/work.ts';
 import type { ConfigStore } from './config.ts';
@@ -29,6 +29,14 @@ interface JargonHook {
 /** 跟屏复读（repeat.ts）的 hook 面，同上：没接就旁路 */
 interface RepeatHook {
   observe(event: ChatEvent): void;
+}
+/** 按协议端消息号现取一条旧消息（引用回查兜底，见 Pipeline.fetchQuoted） */
+interface QuotedSnapshot {
+  userId: string;
+  nickname: string;
+  text: string;
+  files?: { name: string; rel: string }[];
+  forward?: ForwardRecord;
 }
 import { AGENCY_REASON_ZH } from './humanlike/agency.ts';
 import { todayKey, newId } from './util/misc.ts';
@@ -299,6 +307,8 @@ export class Pipeline {
     private selfId: () => string,
     private jargon?: JargonHook,
     private repeat?: RepeatHook,
+    /** 本地会话日志查不到被引用消息时，问协议端要原文（OneBot `get_msg`）；没接就只留占位 */
+    private fetchQuoted?: (chat: ChatRef, messageId: string) => Promise<QuotedSnapshot | null>,
   ) {
     // work 收尾 → 另起一轮人格化汇报（只认 chat 面工具派的活；子代理的完成不回群）。
     // 这是 /work 删除后的唯一收尾路径：chat 先应下，work 在后台跑，跑完由 chat 带着 @ 汇报。
@@ -307,6 +317,10 @@ export class Pipeline {
   }
 
   // ---------------------------------------------------------------- 入站
+
+  /** 入站处理的串行队列（按会话）。引用回查可能要问协议端（get_msg，最长约 1.2s），
+   *  不能让后一条消息越过前一条落账——顺序反了，桌面端与模型看到的对话就是乱的。 */
+  private submitChain = new Map<string, Promise<void>>();
 
   /** 适配器统一入口 */
   submit(event: ChatEvent): void {
@@ -321,9 +335,21 @@ export class Pipeline {
     this.rememberSpeaker(event);
     const chat = { platform: event.platform, type: event.type, chatId: event.chatId };
     // 她还在发气泡时对面又开口：按打断口径把**剩下的气泡**砍掉（纯程序，零模型调用）。
-    // 必须放在落账与门控之前 —— 要求是"对面发完立刻生效"，排在后面就白等了。
-    // 这条消息本身照常入账、照常进攒批，成为下一轮的输入；被砍掉的正文不进历史（见 sendScene）。
+    // 必须放在落账与门控之前 —— 要求是"对面发完立刻生效"，所以不进下面的串行队列。
     this.maybeInterrupt(chat, event);
+    // 落账 + 门控串行执行（回查引用要等协议端回包）
+    const key = `${event.type}_${event.chatId}`;
+    const prev = this.submitChain.get(key) ?? Promise.resolve();
+    const next = prev.then(() => this.ingest(event)).catch((e) => {
+      this.errors.record('error', 'kernel', `入站消息处理失败：${(e as Error).message}`, { chatId: event.chatId });
+    });
+    this.submitChain.set(key, next);
+    void next.finally(() => { if (this.submitChain.get(key) === next) this.submitChain.delete(key); });
+  }
+
+  /** submit 的排队段：落账 → 拟人层门控。所有会 await（引用回查/历史重建）的活都在这。 */
+  private async ingest(event: ChatEvent): Promise<void> {
+    const chat: ChatRef = { platform: event.platform, type: event.type, chatId: event.chatId };
     // 先把该会话的历史缓存暖起来（首次会从会话日志重建）。**必须在 logInbound 之前**：
     // 否则重建时会把本条消息也读成"历史"，而 agentTurn 又会把它当"本轮输入"再追加一次，
     // 于是首轮请求里同一条用户消息出现两遍（抓报文时肉眼可见）。
@@ -331,7 +357,7 @@ export class Pipeline {
     // 入站一律先落账：拟人层可能决定不回，但"群里说了什么"必须留在会话流里，
     // 「为什么没回」由紧跟着的 gate 条目解释。
     // 引用段只带原消息号，落账前查回原文钉进条目（桌面端气泡里的引用块用它）
-    this.attachReply(event);
+    await this.attachReply(event);
     this.sessionLog.logInbound(event);
     this.memory.touchUser(event.userId, event.nickname);
     this.bumpUsage('messages_in');
@@ -499,13 +525,33 @@ export class Pipeline {
   }
 
   /** 引用一条消息：协议端给的 reply 段里只有原消息号，把它查回原文存成快照。
-   *  只查本会话的内存尾（引用基本都是刚刚那几条），查不到就留着 [回复:id] 占位，不编内容。
+   *  先查本会话的日志（内存尾 + 磁盘）；查不到再问协议端要原文（`get_msg`，2026-11-02）——
+   *  重启/重登窗口期 bot 没落账的消息，本地永远查不到，但协议端那边有（实测 787 条失败引用
+   *  的短号 100% 都在 LLBot 的 message 表里）。都拿不到就留着 [回复:id] 占位，不编内容。
    *  bot 自己的出站消息也存了 messageId：群里很常见「引用她上一句 + 这个」，不能漏。 */
-  private attachReply(event: ChatEvent): void {
+  private async attachReply(event: ChatEvent): Promise<void> {
     const rid = String(event.segments.find((s) => s.type === 'reply')?.data?.id ?? '');
     if (!rid) return;
     const src = this.sessionLog.findByMessageId(event.chatId, event.type, rid);
-    if (!src || (src.type !== 'message_in' && src.type !== 'message_out')) return;
+    if (src && (src.type === 'message_in' || src.type === 'message_out')) {
+      this.applyReplyFromEntry(event, src);
+      return;
+    }
+    if (!this.fetchQuoted) return;
+    const chat: ChatRef = { platform: event.platform, type: event.type, chatId: event.chatId };
+    const snap = await this.fetchQuoted(chat, rid).catch(() => null);
+    if (!snap) return;
+    event.replyTo = {
+      userId: snap.userId,
+      nickname: snap.nickname,
+      text: snap.text,
+      files: snap.files?.length ? snap.files : undefined,
+      forward: snap.forward,
+    };
+  }
+
+  /** 用本地日志条目还原引用快照（含被引用记录） */
+  private applyReplyFromEntry(event: ChatEvent, src: SessionLogEntry): void {
     const raw = Array.isArray((src.data as { files?: unknown } | undefined)?.files)
       ? (src.data as { files: unknown[] }).files : [];
     const files = raw

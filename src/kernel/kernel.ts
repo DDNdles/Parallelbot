@@ -298,6 +298,8 @@ export class Kernel {
       () => (this.adapter?.status() as { selfId?: string } | undefined)?.selfId ?? '',
       this.jargon,
       this.repeat,
+      // 引用回查的兜底：本地会话日志没有那条消息时，问协议端要原文（OneBot get_msg）
+      (chat, messageId) => this.adapter.fetchQuotedMessage(chat, messageId),
     );
 
     // 配置限速热更新

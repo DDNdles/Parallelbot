@@ -436,6 +436,48 @@ export class OneBot11Adapter implements TransportAdapter {
 
   // ---------------- 动作调用 ----------------
 
+  /**
+   * 按协议端消息号取一条旧消息（引用回查的兜底，2026-11-02）。
+   *
+   * 本地会话日志只留了最近一段：引用一条 bot 当时没落账的消息（重启/重登窗口期）时，
+   * `findByMessageId` 查不到，引用块就只剩 `[回复:id]` 占位。LLBot / NapCat 都实现了
+   * OneBot 11 的 `get_msg`，直接问协议端要原文。
+   *
+   * 顺带把这条旧消息里的图片/语音/视频落进会话 inbox：被引用的常常是一张图，
+   * 只给 `[图片]` 两个字的模型等于没看见。
+   * 取不到（协议端没这条、超时、动作不支持）就返回 null，调用方保留占位、不编内容。
+   */
+  async fetchQuotedMessage(chat: ChatRef, messageId: string, timeoutMs = 1200): Promise<{
+    userId: string;
+    nickname: string;
+    text: string;
+    files?: { name: string; rel: string }[];
+    forward?: ForwardRecord;
+  } | null> {
+    const id = String(messageId ?? '').trim();
+    if (!id) return null;
+    const r: any = await this.call('get_msg', { message_id: id }, timeoutMs).catch(() => null);
+    if (!r) return null;
+    const segments = normalizeSegments(r.message);
+    const rendered = segmentsToText(segments, this.selfId);
+    // 与入站同一条链路：媒体下载进沙箱、聊天记录取回节点正文
+    const files = await this.pullMedia(segments, chat, { nodes: 0, images: 0, media: 0, dropped: 0 }, '引用');
+    const forward = await this.fetchForwards(segments.filter((s) => s.type === 'forward'), chat);
+    const text = rendered.text.trim();
+    if (!text && !files.length && !forward) return null;
+    const userId = String(r.sender?.user_id ?? r.user_id ?? '');
+    const fromSelf = !!this.selfId && userId === this.selfId;
+    return {
+      userId,
+      nickname: fromSelf
+        ? (this.selfNickname || this.selfId)
+        : String(r.sender?.card || r.sender?.nickname || ''),
+      text,
+      files: files.length ? files.map((f) => ({ name: f.name, rel: f.rel })) : undefined,
+      forward: forward ?? undefined,
+    };
+  }
+
   call<T = any>(action: string, params: Record<string, unknown>, timeoutMs = 15000): Promise<T> {
     const ws = this.client;
     if (!ws || ws.readyState !== 1) return Promise.reject(new Error('协议端未连接'));
