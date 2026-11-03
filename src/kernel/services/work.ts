@@ -554,6 +554,49 @@ export class WorkRunner {
   }
 
   /**
+   * 批量删除运行记录（桌面端「工作」页历史分组的垃圾桶钮）。
+   *
+   * 只删记录：内存快照 + work_runs 行。沙箱里的产物文件、会话日志一律不动（确认框里也这么写），
+   * 用量页的 work 汇总按表实时聚合，删掉记录后那部分自然少掉。
+   * 内存里 phase=running 的一律跳过——正在跑的任务不能从界面上删掉；库里 phase=start 的残留
+   * （内核崩在任务中途）可以删，它本来就是历史快照。
+   * 删掉的若是「等你回答」，顺带清掉那个人的提问现场：否则他下一句话还会续上一个已经
+   * 不存在的任务，而界面上谁也看不出这条记录曾经存在过。
+   */
+  deleteRuns(ids: unknown): number {
+    const want = [...new Set(
+      (Array.isArray(ids) ? ids : [])
+        .map((x) => String(x ?? '').trim())
+        .filter(Boolean),
+    )].slice(0, 500);
+    if (!want.length) return 0;
+
+    const gone = new Set<string>();
+    const rest: string[] = [];
+    for (const id of want) {
+      const r = this.runs.get(id);
+      if (r?.phase === 'running') continue; // 正在跑：内存与 DB 都不动
+      if (r) {
+        if (r.phase === 'await' && r.sandboxKey) {
+          const key = this.pendingKey(r.userId);
+          if (this.pending.get(key)?.sandboxKey === r.sandboxKey) this.pending.delete(key);
+        }
+        this.runs.delete(id);
+        gone.add(id);
+      }
+      rest.push(id);
+    }
+    if (rest.length) {
+      try {
+        const marks = rest.map(() => '?').join(',');
+        for (const row of this.db.all<{ id: string }>(`SELECT id FROM work_runs WHERE id IN (${marks})`, ...rest)) gone.add(row.id);
+        this.db.run(`DELETE FROM work_runs WHERE id IN (${marks})`, ...rest);
+      } catch { /* 表缺失不影响内存删除 */ }
+    }
+    return gone.size;
+  }
+
+  /**
    * chat 的 work_status 工具：只看**这位发起人自己**在**这个会话**里的活。
    * 在跑 → 轮次/工具调用/token 从已收到的 loop 事件实时累加（不必等收尾）；
    * 没在跑 → 给最近一次跑完的（内存优先，重启过就从库里补）。

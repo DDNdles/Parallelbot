@@ -948,6 +948,13 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
           docker: await kernel.session.available(),
         });
       }
+      if (b === 'delete' && req.method === 'POST') {
+        // 工作页「批量删除历史记录」：只删记录（内存 + work_runs 表），沙箱产物不动。
+        // 正在跑的任务由 WorkRunner 跳过；不存在/已删的 id 忽略，返回实际删掉几条。
+        const ids = Array.isArray(body.ids) ? body.ids : [];
+        if (!ids.length) return send({ error: 'ids 不能为空' }, 400);
+        return send({ ok: true, deleted: kernel.workRunner.deleteRuns(ids) });
+      }
       if (b === 'resume' && req.method === 'POST') {
         // 继续一次中断的 work：按 runId 取原任务（可被 body.task 覆盖），在同一发起人沙箱里重开一轮。
         // 汇报仍走 work.done → pipeline 的 chat 汇报轮（trigger='chat'）。

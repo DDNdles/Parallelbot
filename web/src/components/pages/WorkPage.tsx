@@ -90,6 +90,10 @@ export default function WorkPage({ cmd }: { cmd?: PageCmd }) {
   const [now, setNow] = useState(() => Date.now());
   /** 已经点开看过的失败运行：红点只提示一次，点掉后不再回来（存 localStorage） */
   const [acked, setAcked] = useState<Set<string>>(() => new Set());
+  /** 历史分组的批量删除：managing=选择态（行点击变勾选），picked=已勾选的运行 id */
+  const [managing, setManaging] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(() => new Set());
+  const [bulkErr, setBulkErr] = useState('');
   const [skills, setSkills] = useState<SkillsApi | null>(null);
   const [skillErr, setSkillErr] = useState('');
 
@@ -225,6 +229,56 @@ export default function WorkPage({ cmd }: { cmd?: PageCmd }) {
   const runningRuns = runs.filter(isRunning);
   const historyRuns = runs.filter((r) => !isRunning(r));
 
+  // —— 历史分组的批量删除 ——
+  const allPicked = historyRuns.length > 0 && historyRuns.every((r) => picked.has(r.id));
+  const startManage = useCallback(() => { setManaging(true); setPicked(new Set()); setBulkErr(''); }, []);
+  const stopManage = useCallback(() => { setManaging(false); setPicked(new Set()); setBulkErr(''); }, []);
+  const togglePick = useCallback((id: string) => {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
+  const toggleAll = useCallback(() => {
+    setPicked(allPicked ? new Set() : new Set(historyRuns.map((r) => r.id)));
+  }, [allPicked, historyRuns]);
+  /** 删除选中的记录：只删记录、沙箱文件保留（确认框里写明）。成功后本地同步摘掉，不必等下一轮轮询 */
+  const removeRuns = useCallback(async () => {
+    const ids = [...picked];
+    if (!ids.length) return;
+    if (!confirm(`删除选中的 ${ids.length} 条工作记录？\n只删记录，沙箱里的文件与产物会保留。`)) return;
+    setBulkErr('');
+    try {
+      await post('/api/work/delete', { ids });
+      const gone = new Set(ids);
+      setData((d) => (d ? { ...d, runs: d.runs.filter((r) => !gone.has(r.id)) } : d));
+      setLive((prev) => {
+        const next = { ...prev };
+        for (const id of ids) delete next[id];
+        return next;
+      });
+      // 失败红点名册同步收缩，别让 localStorage 一直留着已删运行的 id
+      setAcked((prev) => {
+        const next = new Set([...prev].filter((id) => !gone.has(id)));
+        try { localStorage.setItem('parallel_work_ack_fail', JSON.stringify([...next])); } catch { /* 存不下就只在本页生效 */ }
+        return next;
+      });
+      stopManage();
+    } catch (e) {
+      setBulkErr((e as Error).message || '删除失败');
+    }
+  }, [picked, stopManage]);
+
+  // Esc 退出选择态（与弹窗同一个习惯）；历史被清空时也自动退出
+  useEffect(() => {
+    if (!managing) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') stopManage(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [managing, stopManage]);
+  useEffect(() => { if (managing && !historyRuns.length) stopManage(); }, [managing, historyRuns.length, stopManage]);
+
   // 正在跑的任务让列表上的用时自己走（WorkPage 只在这一段时间里有秒针）
   useEffect(() => {
     if (!runningRuns.length) return;
@@ -286,14 +340,41 @@ export default function WorkPage({ cmd }: { cmd?: PageCmd }) {
             </div>
           )}
 
-          <div className="mset-group">
-            <div className="mset-group-t">历史（{historyRuns.length}）</div>
+          <div className="mset-group wk-hist">
+            <div className="mset-group-t">
+              <span>{managing ? `已选 ${picked.size} / ${historyRuns.length}` : `历史（${historyRuns.length}）`}</span>
+              {managing ? (
+                <button className="wk-link" onClick={stopManage}>取消</button>
+              ) : historyRuns.length > 0 && (
+                <button className="chain-add" title="批量删除历史记录" aria-label="批量删除历史记录" onClick={startManage}>
+                  <Icon name="trash" size={13} />
+                </button>
+              )}
+            </div>
+            {managing && (
+              <div className="wk-bulk">
+                <button className="wk-link" onClick={toggleAll}>{allPicked ? '取消全选' : '全选'}</button>
+                <button className="wk-bulk-del" disabled={!picked.size} onClick={() => void removeRuns()}>
+                  <Icon name="trash" size={12} />{picked.size ? `删除 ${picked.size} 条` : '删除'}
+                </button>
+              </div>
+            )}
+            {bulkErr && <div className="wk-err">{bulkErr}</div>}
             {historyRuns.map((r) => (
-              <button key={r.id} className={'mset-item' + (r.id === sel ? ' sel' : '')}
-                onClick={() => { setSel(r.id); if (!r.ok && !r.awaiting) ackFail(r.id); }} title={r.task}>
-                <span className="mset-item-ic"><Icon name="work" size={15} /></span>
+              <button key={r.id} className={'mset-item' + (managing ? (picked.has(r.id) ? ' sel' : '') : r.id === sel ? ' sel' : '')}
+                aria-pressed={managing ? picked.has(r.id) : undefined}
+                onClick={() => {
+                  if (managing) { togglePick(r.id); return; }
+                  setSel(r.id);
+                  if (!r.ok && !r.awaiting) ackFail(r.id);
+                }} title={r.task}>
+                <span className="mset-item-ic">
+                  {managing
+                    ? <span className="wk-check">{picked.has(r.id) && <Icon name="check" size={11} />}</span>
+                    : <Icon name="work" size={15} />}
+                </span>
                 <FadeName text={r.task} />
-                {!r.ok && !r.awaiting && !acked.has(r.id) && <i className="dot plg-dot-err" />}
+                {!managing && !r.ok && !r.awaiting && !acked.has(r.id) && <i className="dot plg-dot-err" />}
               </button>
             ))}
             {!historyRuns.length && <div className="mset-group-e">还没有历史任务</div>}
