@@ -21,6 +21,8 @@ export interface DepFetchSpec {
   url: string;
   /** 落在 data/downloads 下的文件名 */
   file: string;
+  /** 原生可执行文件：下载完直接挪到 data/bin/<bin>（没有壳要解） */
+  bin?: string;
   /** zip 里要提出来的可执行文件名（给了就多做一步解包到 data/bin） */
   unpackBin?: string;
 }
@@ -32,9 +34,12 @@ export const DEP_FETCHES: Record<string, DepFetchSpec> = {
     file: 'DockerDesktopInstaller.exe',
   },
   ffmpeg: {
-    url: 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip',
-    file: 'ffmpeg-build.zip',
-    unpackBin: 'ffmpeg.exe',
+    // npmmirror 的阿里 CDN：本机实测 ~800KB/s；原先的 gyan.dev 只有 ~100KB/s，一键安装慢就慢在它。
+    // b6.0 这份是 MZ 头的原生 exe（81MB，ffmpeg 6.0），落盘即用、无需解包。
+    // 2026-11-04 验过：200 / 81,114,624 字节 / 4d5a 头 / 无 content-encoding。
+    url: 'https://registry.npmmirror.com/-/binary/ffmpeg-static/b6.0/ffmpeg-win32-x64',
+    file: 'ffmpeg.exe',
+    bin: 'ffmpeg.exe',
   },
 };
 
@@ -101,6 +106,13 @@ async function finish(state: FetchState, spec: DepFetchSpec, dataDir: string): P
     // 流式落盘：整体 arrayBuffer 会把 600MB 安装包一口吞进内存
     await pipeline(Readable.fromWeb(resp.body as any), counter, createWriteStream(part));
     renameSync(part, state.dest);
+    if (spec.bin) {
+      // 原生 exe：进 data/bin（与 unpackBin 的产物同位置），落盘即用
+      mkdirSync(join(dataDir, 'bin'), { recursive: true });
+      renameSync(state.dest, join(dataDir, 'bin', spec.bin));
+      // 转码那头缓存过"没有 ffmpeg"，不清掉要等重启才认新位置
+      setFfmpegCandidate(bundledFfmpeg(dataDir));
+    }
     if (spec.unpackBin) {
       await unpackBin(state.dest, spec.unpackBin, bundledFfmpeg(dataDir));
       // 转码那头缓存过"没有 ffmpeg"，不清掉要等重启才认新位置

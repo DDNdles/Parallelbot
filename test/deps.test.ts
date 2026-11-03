@@ -91,7 +91,7 @@ test('依赖探测：每项都带名称/状态，缺失项必须给出下载或�
 test('代下载只认白名单：不在表里的 id 一律拒绝，绝不拿前端传来的 URL 去 fetch', () => {
   assert.throws(() => startDepFetch('evil', mkdtempSync(join(tmpdir(), 'parallel-dl-'))), /白名单/);
   assert.match(DEP_FETCHES.docker.url, /^https:\/\/desktop\.docker\.com\//);
-  assert.equal(DEP_FETCHES.ffmpeg.unpackBin, 'ffmpeg.exe', 'ffmpeg 是唯一"下完顺手解出来就能用"的');
+  assert.equal(DEP_FETCHES.ffmpeg.bin, 'ffmpeg.exe', 'ffmpeg 是唯一"下完落进 data/bin 就能用"的（npmmirror 裸 exe，无需解包）');
 });
 
 test('depsReady：只看必备项', () => {  const mk = (over: Partial<DepItem> & { id: string }, required = true): DepItem => ({

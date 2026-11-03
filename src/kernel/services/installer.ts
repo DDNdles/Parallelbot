@@ -126,20 +126,32 @@ function probeOneOf(ctx: InstallerCtx, id: string): Promise<DepItem> {
   return ctx.probeOne ? ctx.probeOne(id) : probeDep(id, ctx.probeCtx());
 }
 
+/** 只下载/解包、不弹任何安装窗的两项：并行拉（大文件串行等于白等两遍网，2026-11-04） */
+const PARALLEL_IDS = new Set(['ffmpeg', 'llbot']);
+
 async function runJob(ctx: InstallerCtx, view: InstallJobView): Promise<void> {
   const now = ctx.now ?? Date.now;
   const sleep = ctx.sleep ?? realSleep;
   const first = await probeAllOf(ctx);
   applyProbe(view, first);
+  const failStep = (step: InstallStep, e: unknown) => {
+    step.state = 'failed';
+    step.detail = `安装失败：${(e as Error).message}`.slice(0, 200);
+  };
+  // 两个纯下载在后台并行跑起来，winget 那几项照旧在前面串行走——下载不抢安装器的锁，
+  // 别再让 81MB 的 ffmpeg 挡住 UAC 弹窗和第一屏变绿
+  const downloading = view.steps
+    .filter((s) => s.state !== 'ok' && PARALLEL_IDS.has(s.id))
+    .map((step) => installOne(ctx, step, { now, sleep }).catch((e) => failStep(step, e)));
   for (const step of view.steps) {
-    if (step.state === 'ok') continue;            // 已经装好的不重装
+    if (step.state === 'ok' || PARALLEL_IDS.has(step.id)) continue;   // 已装好 / 已在后台并行
     try {
       await installOne(ctx, step, { now, sleep });
     } catch (e) {
-      step.state = 'failed';
-      step.detail = `安装失败：${(e as Error).message}`.slice(0, 200);
+      failStep(step, e);
     }
   }
+  await Promise.all(downloading);
   // 收尾重探一次：winget 装完但 PATH 尚未刷新、或安装器异步落盘，都靠这一次拍板
   const final = await probeAllOf(ctx);
   applyProbe(view, final);
@@ -202,10 +214,10 @@ async function installOne(
   }
 }
 
-/** ffmpeg：内核代下 + 解包（downloads.ts 的白名单与校验都在那一层） */
+/** ffmpeg：内核代下（npmmirror 裸 exe，无需解包；downloads.ts 的白名单与校验都在那一层） */
 async function installFfmpeg(ctx: InstallerCtx, step: InstallStep, clock: { now: () => number; sleep: (ms: number) => Promise<void> }): Promise<void> {
   step.state = 'running';
-  step.detail = '正在下载 ffmpeg 并解压…';
+  step.detail = '正在下载 ffmpeg…';
   startDepFetch('ffmpeg', ctx.dataDir);
   const until = clock.now() + FFMPEG_TIMEOUT_MS;
   for (;;) {
