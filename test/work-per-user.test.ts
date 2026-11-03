@@ -291,9 +291,11 @@ test('任务隔离：新任务各开各的沙箱（跨群也隔离），续接�
     const cont = g.kernel.workRunner.list(5, 'group_9306')[0];
     assert.ok(cont, '续接的任务要落库');
     assert.equal(cont.sandboxKey, key1, '续接必须沿用旧任务的沙箱');
-    // list().task 是短标；全文落 work_runs 表（work_status/recent 与桌面端同源）
+    // list().task 是短标；全文落 work_runs 表（work_status/recent 与桌面端同源）。
+    // 2026-11-03 起续接是**同一场对话**：正文只带这次的增量（【继续上次的工作】），
+    // 完整前因后果由播种进上下文的上一场会话记录自己带，不再拼接旧任务全文。
     const row = g.kernel.db.get('SELECT task FROM work_runs WHERE id=?', cont.id) as { task: string };
-    assert.match(row.task, /接着上次的任务继续做/, '任务正文要带续接拼装');
+    assert.match(row.task, /【继续上次的工作】/, '续接正文 = 同场对话的增量');
   } finally {
     await g.cleanup();
   }

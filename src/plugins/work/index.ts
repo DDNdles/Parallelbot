@@ -164,6 +164,7 @@ export function setup(ctx: PluginContext): void {
       python_session: '常驻 Python', run_python_work: 'Python', run_bash: '命令行',
       sandbox_read: '读文件', sandbox_write: '写文件', sandbox_edit: '改文件', sandbox_grep: '检索文件',
       sandbox_glob: '找文件', web_search: '联网搜索', web_fetch: '读网页', todo: '任务清单',
+      fetch_file: '取大文件',
       delegate: '子代理', work_finish: '收尾', work_ask: '提问',
       skill: '技能', skill_file: '读技能文件', skill_install: '装配技能',
     } as Record<string, string>)[n] || '工具';
@@ -249,6 +250,7 @@ export function setup(ctx: PluginContext): void {
       '同一件活还在跑、用户中途又提新要求（改颜色/换风格/补充细节等）：仍然用 messages 引用他的原话，程序会把这些话**插话给正在跑的任务**（它下一轮就能看到），不会另开一个新任务。',
       '一轮里用户说了好几条相关的，就一次引用几条（按原顺序转发）；只引用真正和这件活有关的消息。',
       '新旧任务由你判断，但**用户对刚做完（或最近）的任务提修改、调整条件、说不满意——一律算那个任务的延续**：带 continue_run（任务号看 work_status，或 latest）沿用原沙箱接着做，绝不能新开任务从头重做。只有和旧任务无关的新事情才开新任务。',
+      '用户只说「继续」「接着弄」「搞完它」这种没有新内容的话，同样算延续：带 continue_run: latest，程序会把上一场对话整个接上（模型在同一个会话里继续，不用重做）。不填 continue_run 就会另开全新任务，那不是用户要的。',
       '派出去之后这一轮只用一句自然的话应下（像"好，我去弄"），不要列计划、不要声称已经做完。',
       '活跑完会另外给你一轮汇报：那一轮再讲结论，产物由内核随汇报逐条发出，你不要自己发。',
     ],
@@ -259,7 +261,7 @@ export function setup(ctx: PluginContext): void {
           type: 'array', minItems: 1, maxItems: 10, items: { type: 'string' },
           description: '要转给 work 的消息：从聊天窗口里逐字引用（可只截一段，但必须一字不差）。可以一条或多条，按你给的顺序转发；用户后续的修改要求也这样引用。',
         },
-        continue_run: { type: 'string', description: '用户明确要「接着旧任务继续」时填：work_status 列出的任务号，或 latest=他最近一个任务。填了=沿用那个任务的沙箱与文件；不填=全新任务（全新沙箱，看不到旧任务文件）。用户没明确要继续就不要填。' },
+        continue_run: { type: 'string', description: '用户要「接着旧任务继续」时填：work_status 列出的任务号，或 latest=他最近一个任务。填了=沿用那个任务的沙箱、文件与对话现场（同一场会话接着跑，不用重做）；不填=全新任务（全新沙箱，看不到旧任务）。只说「继续」也算要继续。' },
       },
       required: ['messages'],
     },
@@ -748,6 +750,53 @@ export function setup(ctx: PluginContext): void {
       });
     }
   }
+
+  // ---------------- 超大文件按需拉取（work 面，2026-11-03）----------------
+  // 16MB 以上的用户文件不会被自动拉进沙箱（适配器登记在 pending_files）：
+  // 这里给 work 一个取件口——无参列清单，带 name 把文件拉进任务沙箱 inbox。
+  ctx.llm.registerTool({
+    name: 'fetch_file',
+    description: '把用户发来但太大（超过 16MB）、没能自动进沙箱的文件下载到任务沙箱 inbox/ 里。不带参数=列出有哪些待取文件；带 name=按文件名（可只写名字的一段）取最新的一条。用户提到「我发的那个文件/视频/音乐」而 inbox 里没有时，先来这儿找。',
+    minRole: 'admin',
+    surface: WORK,
+    promptSnippet: '把用户发来但太大、没自动进沙箱的文件按需下载进 inbox/（无参列清单，带 name 取文件）',
+    promptGuidelines: [
+      'inbox/ 里找不到用户说他发过的文件时，先用不带参数的 fetch_file 看登记簿（大文件不会自动进沙箱），再按名字取。',
+      '取回的文件在 inbox/ 里（返回值会给出路径），之后照常用 sandbox_read / 脚本处理；同一文件取一次就够，别重复拉。',
+      '登记簿里没有想要的文件就如实说「文件没能收到，请重新发一次」，不要编造下载结果。',
+    ],
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '要取的文件名（可只写名字的一段，如「背景音乐」）；不填 = 只列出待取文件，不下载' },
+      },
+    },
+    handler: async (args, tctx) => {
+      // 下载落点 = 任务沙箱（tctx.chat）；登记簿按**真实会话**查（tctx.event.chatId），
+      // 任务沙箱的 chatId 是 u<QQ> 这类合成值，登记不是按它记的
+      const chatId = String(tctx.event?.chatId ?? '');
+      const userId = String(tctx.event?.userId ?? '');
+      const want = String(args.name ?? '').trim();
+      try {
+        if (!want) {
+          const items = ctx.work.listOversizedFiles(chatId, userId);
+          if (!items.length) return '（登记簿是空的：没有「太大没自动进沙箱」的文件。小于 16MB 的文件都已经在 inbox/ 里了。）';
+          const lines = items.map((f) => {
+            const who = f.userId && f.userId !== userId ? `（来自 ${f.userId}）` : '';
+            const mb = f.size ? `，${f.size >= 1024 * 1024 ? `${(f.size / 1024 / 1024).toFixed(1)} MB` : `${Math.round(f.size / 1024)} KB`}` : '';
+            return `- 「${f.name}」${mb}${who}，${new Date(f.at).toLocaleString('zh-CN')}`;
+          });
+          return `待取的大文件（发文件时超过 16MB，没自动进沙箱）：\n${lines.join('\n')}\n\n用 name 填文件名（或名字的一段）来取；取回来在 inbox/ 里。`;
+        }
+        const r = await ctx.work.fetchOversizedFile(chatRefOf(tctx), chatId, userId, want);
+        if (!r.ok) return `（${r.error}）`;
+        const mb = r.size >= 1024 * 1024 ? `${(r.size / 1024 / 1024).toFixed(1)} MB` : `${Math.round(r.size / 1024)} KB`;
+        return `已把「${r.name}」（${mb}）下载到 ${r.rel}；直接用这个路径处理。`;
+      } catch (e) {
+        return `取文件失败：${(e as Error).message}`;
+      }
+    },
+  });
 
   // ---------------- 任务清单（work 面）----------------
   // 多步任务的显式计划：按 runId 隔离（一次 run 一份，跑完不必留），清单同时挂在 system 的一个

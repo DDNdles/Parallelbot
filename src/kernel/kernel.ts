@@ -23,6 +23,7 @@ import { setFfmpegCandidate } from './services/media.ts';
 import { NapCatManager } from './services/napcat.ts';
 import { ensureFaces } from './services/faces.ts';
 import { PluginContainer } from './container.ts';
+import { nowMs } from './util/misc.ts';
 import { CoverSupervisor, planCoverSupervisor } from './cover-supervisor.ts';
 import { UpdateService } from './services/update.ts';
 import { AgentLoop, HistoryStore } from './agentloop.ts';
@@ -212,6 +213,8 @@ export class Kernel {
         notifyOwner: (t) => this.notifyOwner(t),
         // 容器先于适配器构造，这里给的是惰性取值：真正调用发生在 work 轮（远晚于 boot）
         groupTitle: (chatId) => this.adapter?.groupName(chatId) || `群${chatId}`,
+        // fetch_file 按需拉大文件：协议端换临时链接的桥（同样是惰性取值）
+        protocolFileUrl: (fileId, kind) => this.adapter?.fetchFileUrl(fileId, kind) ?? Promise.resolve(''),
       },
     );
     this.coverSupervisor = new CoverSupervisor({
@@ -306,6 +309,30 @@ export class Kernel {
     this.bus.on(busEvents.configChanged, () => {
       this.chat.setRatePerMin(this.config.config.risk.replyRatePerMin);
       this.humanlike.rearmAll();
+    });
+    // 超大文件登记：适配器被体积闸拦下的用户文件落 pending_files，
+    // work 的 fetch_file 按需再拉（取回成功删行；7 天前的行顺手清）
+    this.bus.on('adapter.oversized_file', (d: { chat?: { type?: string; chatId?: string }; userId?: string; name?: string; size?: number; fileId?: string; url?: string }) => {
+      const type = d?.chat?.type === 'group' ? 'group' : 'private';
+      const chatId = String(d?.chat?.chatId ?? '');
+      if (!chatId) return;
+      try {
+        this.db.run(
+          'INSERT INTO pending_files (chat_type, chat_id, user_id, name, size, file_id, url, ts) VALUES (?,?,?,?,?,?,?,?)',
+          type, chatId, String(d?.userId ?? ''), String(d?.name ?? 'file'),
+          Math.max(0, Math.round(Number(d?.size ?? 0))),
+          String(d?.fileId ?? ''), String(d?.url ?? ''), nowMs(),
+        );
+        // 登记簿不是仓库：一行最多留 7 天（QQ 的直链也早过期了），单会话最多 50 条
+        this.db.run('DELETE FROM pending_files WHERE ts < ?', nowMs() - 7 * 24 * 3600_000);
+        this.db.run(
+          `DELETE FROM pending_files WHERE chat_id=? AND id NOT IN (
+             SELECT id FROM pending_files WHERE chat_id=? ORDER BY ts DESC LIMIT 50)`,
+          chatId, chatId,
+        );
+      } catch (e) {
+        this.errors.record('warn', 'kernel', `大文件登记失败: ${(e as Error).message}`);
+      }
     });
   }
 

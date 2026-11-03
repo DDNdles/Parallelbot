@@ -164,8 +164,10 @@ export function buildWorkSections(input: WorkPromptInput): { system: string; sec
         `- 宿主机桌面与它上面装的程序（本机 Chrome/Edge 等）在沙箱里看不到、也不该去调用；`,
         `  需要渲染网页就用 browser_*，不要试图启动本机浏览器。`,
         `- 这个沙箱是**本任务独立**的一份（发起人任务空间里的一次任务）：别的任务的文件看不到、`,
-        `  也不该去找；如果是续接任务（任务里写了「接着上次」），上次的文件就在同一份沙箱里。`,
-        `  群聊里收到的文件已镜像到 \`inbox/\`，用相对路径读即可。`,
+        `  也不该去找；如果是续接任务（任务里写了「接着上次」），上次的文件就在同一份沙箱里，`,
+        `  上次的对话过程也在本轮开头的上下文里——那就是同一场对话的继续。`,
+        `  群聊里收到的文件已镜像到 \`inbox/\`，用相对路径读即可；用户发过但太大没进来的文件`,
+        `  （视频、无损音频、大压缩包）用 \`fetch_file\` 按需取。`,
         `- 产物留在会话沙箱内，按下面的格式登记；**不要在过程中自己发文件**（不要 send_file）：`,
         `  内核会把所有产物逐条发给用户，结论另外一条。`,
       ].join('\n'),
@@ -250,17 +252,21 @@ export interface PendingAsk {
   sandboxKey?: string;
   /** 谁问的（回答要同一个人来给） */
   userId: string;
+  /** 提问的那场 run：回答来时接它的会话记录继续（同一场对话，2026-11-03 起） */
+  runId?: string;
+  /** 原始任务原文（未经续接拼接）：拼接兜底时用它，防任务文嵌套滚雪球 */
+  origTask?: string;
 }
 
 /**
- * 「接着上次的活干」：work 不驻留上下文（一次 run = 一个任务），
- * 所以续接靠任务描述交接——把上次停下的问题与这次的回答拼成新任务。
- * 末尾两句是给模型的兜底：万一管理员其实是在派另一件事，别被这段历史带偏。
+ * 「接着上次的活干」：这是**会话记录丢了**时的兜底（记录还在时 WorkRunner 只传这次的增量）。
+ * 把上次停下的问题与这次的回答拼成新任务；task 用原始任务原文（origTask 优先），
+ * 拼接文绝不能拿上一版拼接文当原料——那样每续一轮就嵌套一层（work_0bb601… 实锤）。
  */
-export function composeContinueTask(pending: { task: string; question: string; notes?: string }, answer: string): string {
+export function composeContinueTask(pending: { task: string; origTask?: string; question: string; notes?: string }, answer: string): string {
   return [
     '【接着上次没做完的活】',
-    `上次交给你的事：${pending.task}`,
+    `上次交给你的事：${pending.origTask || pending.task}`,
     `你上次停下来问发起者的：${pending.question}`,
     pending.notes ? `（当时你已经做到：${pending.notes}）` : '',
     '',
@@ -274,6 +280,8 @@ export function composeContinueTask(pending: { task: string; question: string; n
 /**
  * 通用续接拼装（2026-10-25 任务隔离：用户明确要「接着旧任务」时）。
  * 与 composeContinueTask（回答上次提问）不同：这是用户主动点名继续的旧任务。
+ * 只在会话记录丢失时走：拼接文里放**原始任务原文**（prev.task 该传 origTask），
+ * 不放上一版拼接文——嵌套滚雪球就是这么来的。
  */
 export function composeTaskResume(prev: { task: string; label?: string }, next: string): string {
   return [

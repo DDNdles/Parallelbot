@@ -850,11 +850,17 @@ test('work 停下来提问：chat 转达问题；管理员自然回答后 work_d
   await done2;
   await quiesce();
 
-  const task2 = mockProvider.calls.slice(calls2).map((c) => c.lastUser ?? '').find((t) => t.includes('接着上次'));
-  assert.ok(task2, '第二轮的 work 请求要带上"接着上次"的任务描述');
+  // 2026-11-03 起回答走**同一场对话**续接：work 的新输入只带问题与这次的回答，
+  // 第一场的过程由播种进上下文的会话记录自己带（不再拼一份旧任务全文）
+  const task2 = mockProvider.calls.slice(calls2).map((c) => c.lastUser ?? '').find((t) => t.includes('回到上次没做完的活'));
+  assert.ok(task2, '第二轮的 work 请求要带上同场续接的增量描述');
   assert.ok(task2!.includes('你上次停下来问发起者的：用哪份文件？'), task2);
   // 发起者的回答由 chat 通过 work_dispatch 的 messages 转发原话传入
   assert.ok(task2!.includes('发起者这次说的是：主人：用 inbox/a.csv 那份'), task2);
+  assert.ok(
+    mockProvider.calls.slice(calls2).some((c) => c.usersJoined?.includes('帮我整理一下那份报表')),
+    '第一场的任务原文应经会话记录播种进第二轮的请求历史',
+  );
 
   const run2 = kernel.workRunner.list(5, chatKey)[0];
   assert.equal(run2.awaiting, undefined, '这一轮是正常交付，不该再挂着"等回答"');

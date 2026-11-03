@@ -7,7 +7,8 @@ import { join } from 'node:path';
 // ============================================================
 // 模型瞬态中断重试（2026-10-25）：Gemini 偶发 MALFORMED_FUNCTION_CALL
 // 把整轮转成 stopReason='error' 的空 assistant、群里沉默——agentloop
-// 识别后摘掉失败消息重跑一次（最多一次），再失败才按原路处理。
+// 识别后摘掉失败消息重跑。2026-11-03 起给 2 次机会（免费网关一次重试常不够），
+// 再失败把对端报错原文带回——不再一句「没有返回任何内容」让排障从零猜。
 // ============================================================
 
 async function boot(port: number) {
@@ -63,20 +64,20 @@ test('chat 轮模型瞬态中断：摘掉失败消息重跑一次，回复正常
   }
 });
 
-test('work 轮连续两次中断：重试一次后放弃，按空回复判失败', async () => {
+test('work 轮连续三次中断：重试两次后放弃，报错带对端原文', async () => {
   const g = await boot(33000 + (process.pid % 8000) + 1);
   try {
     const chat = { platform: 'qq' as const, type: 'group' as const, chatId: '9502' };
     const agent = g.kernel.container.workAgent();
     const tools = g.kernel.container.workToolsFor(chat, 'owner', agent, 0);
-    g.mock.script.push({ error: 'Provider stopped with: MALFORMED_FUNCTION_CALL' });
-    g.mock.script.push({ error: 'Provider stopped with: MALFORMED_FUNCTION_CALL' });
+    // 首发 + 两次重试都挂：共 3 发
+    for (let i = 0; i < 3; i++) g.mock.script.push({ error: 'Provider stopped with: MALFORMED_FUNCTION_CALL' });
     const r = await g.kernel.workRunner.run({
       chat, task: '做个东西', taskLabel: '做个东西', userId: '10001', nickname: 'n', role: 'owner',
       agent, tools, trigger: 'command', depth: 0, idleRemindMs: 50,
     });
-    assert.equal(r.ok, false, '两次都中断要按失败处理');
-    assert.match(r.error ?? '', /没有返回任何内容/, `失败原因要是空回复口径：${r.error}`);
+    assert.equal(r.ok, false, '三次都中断要按失败处理');
+    assert.match(r.error ?? '', /MALFORMED_FUNCTION_CALL/, `失败原因要带对端原文：${r.error}`);
   } finally {
     await g.cleanup();
   }

@@ -848,6 +848,10 @@ export interface GatedWork {
    * `ok`：那次运行是否完整跑完（失败/中断的活也可能已产出文件，deliver_file 据此加说明）。
    */
   latestArtifacts(userId: string): { runId: string; task: string; artifacts: string[]; at: number; userId: string; ok: boolean; sandboxKey?: string } | undefined;
+  /** fetch_file：登记过的超大文件清单（这个会话或这个人发的；最新在前） */
+  listOversizedFiles(chatId: string, userId: string): { id: number; name: string; size: number; userId: string; at: number }[];
+  /** fetch_file：把登记过的超大文件按名字（可只写一段）拉进任务沙箱 inbox；成功后登记行删除 */
+  fetchOversizedFile(chat: ChatRef, chatId: string, userId: string, match: string): Promise<{ ok: true; rel: string; size: number; name: string } | { ok: false; error: string }>;
 }
 
 export interface SandboxEntry {

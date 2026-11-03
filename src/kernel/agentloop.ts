@@ -103,8 +103,14 @@ export class AgentLoop {
       workIdleRemindMs?: number;
       /** 拿到正在跑的 pi Agent：work 任务插话用（只暴露 steer） */
       onAgent?: (agent: { steer: (message: any) => void }) => void;
+      /**
+       * 续接的上一场对话（pi 消息原样，来自上次 run 落盘的会话记录）。
+       * 排在最前、本轮 ctx.messages 转出来的新输入排在最后——模型看到的是同一场对话的继续，
+       * 不是只带着任务文字冷启动（2026-11-03 起 work 续接的语义）。
+       */
+      priorMessages?: unknown[];
     },
-  ): Promise<{ reply: string; rounds: number; toolCalls: number; steps: string[]; finished: boolean }> {
+  ): Promise<{ reply: string; rounds: number; toolCalls: number; steps: string[]; finished: boolean; error?: string; messages: unknown[] }> {
     const { chat } = ctx;
     const chatKey = opts.chatKey;
     // 入账会话（work 轮=汇报聊天；chat 本身是任务沙箱 ref——2026-10-25 任务隔离）
@@ -212,7 +218,11 @@ export class AgentLoop {
     if (droppedMedia.length) {
       this.errors.record('warn', 'provider', `语音最多 ${MEDIA_CAP.audio} 条、视频最多 ${MEDIA_CAP.video} 条，超出的没送出：${droppedMedia.join('、')}`, { chatId: ledger.chatId });
     }
-    const history = seeded.messages;
+    const history = [
+      // 续接：上一场对话原样在前（只留 pi 认识的角色，system 每轮都是新组装的，不带来）
+      ...(opts.priorMessages ?? []).filter((m: any) => ['user', 'assistant', 'toolResult'].includes(m?.role)),
+      ...seeded.messages,
+    ];
     const modelStub = await pie.piModelFor({
       providerId: '', protocol: 'openai-compatible', baseUrl: '',
       model: { id: chainModelId(this.config, ctx) },
@@ -292,20 +302,23 @@ export class AgentLoop {
 
       // 模型瞬态中断重试（2026-10-25）：Gemini 生成工具调用参数时偶发
       // MALFORMED_FUNCTION_CALL，pi 把它转成 stopReason='error' 的空 assistant 收场——
-      // 该轮直接作废、群里沉默。这类抽风重跑一次通常就好：把失败消息摘出 transcript
-      // 再 continue（最多一次，再失败走原路 = chat 沉默 / work 按空回复判失败）。
-      for (let retries = 0; retries < 1; retries++) {
+      // 该轮直接作废、群里沉默。这类抽风重跑通常就好：把失败消息摘出 transcript 再 continue。
+      // 2026-11-03 起 2 次机会 + 1.5s 退避（免费网关「fetch failed」一次重试常常还挂），
+      // 再失败把最后一次的错误原样带回——不能只给一句"没有返回任何内容"让排障从零猜。
+      for (let retries = 0; retries < 2; retries++) {
         const msgs = agent.state.messages as { role?: string; stopReason?: string; errorMessage?: string; content?: unknown }[];
         const last = msgs[msgs.length - 1];
         if (last?.role !== 'assistant' || last.stopReason !== 'error' || opts.abort?.aborted) break;
         // 收尾工具落地后的主动 abort 也是 stopReason='error'（errorMessage="…aborted"）——
         // 那是任务正常收尾，不是瞬态中断，重试它会把 abort 后的空转变成多烧一次模型调用
-        if (/abort/i.test(String(last.errorMessage ?? ''))) break;
+        const errText = String(last.errorMessage ?? '').trim();
+        if (/abort/i.test(errText)) break;
         msgs.pop();
-        const note = `模型瞬态中断：${truncate(String(last.errorMessage ?? ''), 140)}；重试一次`;
+        const note = `模型瞬态中断：${truncate(errText, 140)}；重试（${retries + 1}/2）`;
         event({ kind: 'text', round: cap.rounds, text: `（${note}）` });
         // chat 轮没有 work 事件流：落一条 gate 到会话日志，排障能看到
         this.sessionLog.append(ledger.chatId, ledger.type, { type: 'gate', role: 'system', text: note });
+        if (retries > 0) await new Promise<void>((res) => setTimeout(res, 1500));
         await agent.continue();
         await agent.waitForIdle();
       }
@@ -361,6 +374,13 @@ export class AgentLoop {
       // 沉默由 pipeline 落 gate 条目，错误细节走报错中心；work 链靠 WorkRunner 把空回复判成失败。
       // 2026-10-25 用户定：work 的交付正文不设上限（交付时整段直接送出）；chat 轮保留防抽风切片
       if (!ctx.workTurn) reply = reply.slice(0, 3500);
+      // 重试也没救回来 = 末条仍是 stopReason='error' 的 assistant：把错误原文带回，
+      // 调用方（WorkRunner）据此报「模型请求失败：…」，而不是一句没有信息量的「没有返回任何内容」
+      const tail = (agent.state.messages as { role?: string; stopReason?: string; errorMessage?: string }[]).at(-1);
+      const loopError = !reply.trim() && tail?.role === 'assistant' && tail.stopReason === 'error'
+        && !/abort/i.test(String(tail.errorMessage ?? ''))
+        ? String(tail.errorMessage ?? '').trim() || '模型请求失败（对端未说明原因）'
+        : undefined;
       event({ kind: 'final', text: reply });
 
       // work 轮是否"正式收尾"（work_finish / work_ask）：提醒满限仍只发文字的如实报
@@ -375,7 +395,7 @@ export class AgentLoop {
         data: { rounds: cap.rounds, toolCalls: cap.toolCalls, usage: cap.usage, model: this.llm.servingLabel(chain) },
       });
       this.bus.emit(busEvents.agentEnd, { chatKey, reply, rounds: cap.rounds });
-      return { reply, rounds: cap.rounds, toolCalls: cap.toolCalls, steps, finished };
+      return { reply, rounds: cap.rounds, toolCalls: cap.toolCalls, steps, finished, error: loopError, messages: agent.state.messages as unknown[] };
     } catch (e) {
       const err = e as Error;
       this.sessionLog.append(ledger.chatId, ledger.type, { type: 'error', role: 'system', text: `agent loop 异常: ${err.message}` });

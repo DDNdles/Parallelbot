@@ -22,6 +22,11 @@ import {
 const NAME_RETRY_MS = 5 * 60_000;
 /** 取聊天记录正文的超时：合并转发的内容不在事件里，要现向服务器取，比普通动作慢 */
 const FORWARD_TIMEOUT_MS = 10_000;
+/**
+ * 自动下载的体积上限（= downloadToBuffer 的默认闸）。超限的文件不当场拉：
+ * 记进 pending_files（见 kernel 的 oversized_file 订阅），work 的 fetch_file 按需再拉。
+ */
+const AUTO_DOWNLOAD_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
  * OneBot 11 适配器（支持 access token）。
@@ -362,7 +367,15 @@ export class OneBot11Adapter implements TransportAdapter {
         if (kind === 'image') budget.images++; else budget.media++;
         out.push({ name, rel, sandboxPath: join(this.sandbox.root(chat), rel), size: buf.length, url });
       } catch (e) {
-        this.log.warn(`聊天记录里的${kind === 'image' ? '图片' : kind === 'audio' ? '语音' : '视频'}落盘失败: ${(e as Error).message}`);
+        // 体积闸拦下的大视频/大图也登记：文件不能就这么多丢掉（fetch_file 按需再拉）
+        if (/文件过大/.test((e as Error).message)) {
+          this.noteOversized(chat, '', nodeName(s.data.file, kind), {
+            fileId: String(s.data.file ?? s.data.file_id ?? ''), url,
+            source: where === '消息' ? '消息附件' : '聊天记录',
+          });
+        } else {
+          this.log.warn(`聊天记录里的${kind === 'image' ? '图片' : kind === 'audio' ? '语音' : '视频'}落盘失败: ${(e as Error).message}`);
+        }
       }
     }
     return out;
@@ -383,6 +396,24 @@ export class OneBot11Adapter implements TransportAdapter {
   }
 
   /**
+   * 超大文件登记：下载被体积闸拦下的文件记一笔（pending_files 表），文件本身不丢——
+   * work 的 fetch_file 工具之后能按需再拉一次（2026-11-03 迷宫任务的配乐就这么丢的）。
+   */
+  private noteOversized(chat: ChatRef, userId: string, name: string, spec: { size?: number; fileId?: string; url?: string; source?: string }): void {
+    try {
+      this.bus.emit('adapter.oversized_file', {
+        chat: { platform: 'qq', type: chat.type, chatId: chat.chatId },
+        userId, name,
+        size: Math.max(0, Math.round(Number(spec.size ?? 0))),
+        fileId: String(spec.fileId ?? ''), url: String(spec.url ?? ''),
+        source: String(spec.source ?? ''),
+      });
+      const mb = spec.size ? `（${(spec.size / 1024 / 1024).toFixed(1)} MB）` : '';
+      this.log.info(`大文件没自动进沙箱${mb}，已登记待 work 按需取：${name}`);
+    } catch { /* 登记失败不影响消息主流程 */ }
+  }
+
+  /**
    * 群文件上传通知：协议端只给文件号，得换一次临时链接再下。
    * `get_image` 的入参键名两家不一样（LLBot 要 `file`，NapCat 按 OneBot 11 要 `file_id`），
    * 所以两个键一起给——LLBot 的 zod 是 strip 模式，多出来的键会被忽略，不会报参数错误。
@@ -393,9 +424,15 @@ export class OneBot11Adapter implements TransportAdapter {
     const chat: ChatRef = { platform: 'qq', type: 'group', chatId };
     if (this.config.chatHidden(this.selfId, 'group', chatId)) return;
     if (this.isBlocked(String(msg.user_id))) return;
+    const userId = String(msg.user_id ?? '');
+    const name = String(file.name ?? 'file');
+    // 体积在通知里就写着：超限的直接登记（fetch_file 按需再拉），不白拉几十 MB 进内存
+    if (Number(file.size ?? 0) > AUTO_DOWNLOAD_MAX_BYTES) {
+      this.noteOversized(chat, userId, name, { size: Number(file.size), fileId: String(file.id ?? ''), source: '群文件' });
+      return;
+    }
     try {
       let buf: Buffer | null = null;
-      let name = String(file.name ?? 'file');
       if (file.url) buf = await downloadToBuffer(String(file.url));
       else if (file.id) {
         const r = await this.call('get_image', fileIdParams(file.id)).catch(() => null);
@@ -404,10 +441,15 @@ export class OneBot11Adapter implements TransportAdapter {
       if (buf) {
         const rel = this.sandbox.saveInbox(chat, name, buf);
         this.log.info(`群文件已入沙箱 ${chatId}/${rel}`);
-        this.bus.emit('adapter.file_received', { chatId, userId: String(msg.user_id), name, rel });
+        this.bus.emit('adapter.file_received', { chatId, userId, name, rel });
       }
     } catch (e) {
-      this.log.warn(`群文件落盘失败: ${(e as Error).message}`);
+      // 声明里没带 size、实际超了也在这登记——文件不能就这么多丢掉
+      if (/文件过大/.test((e as Error).message)) {
+        this.noteOversized(chat, userId, name, { fileId: String(file.id ?? ''), url: String(file.url ?? ''), source: '群文件' });
+      } else {
+        this.log.warn(`群文件落盘失败: ${(e as Error).message}`);
+      }
     }
   }
 
@@ -416,10 +458,14 @@ export class OneBot11Adapter implements TransportAdapter {
     const chat: ChatRef = { platform: 'qq', type: 'private', chatId };
     if (this.config.chatHidden(this.selfId, 'private', chatId)) return;
     if (this.isBlocked(chatId)) return;
+    const file = msg.file ?? {};
+    const name = String(file.name ?? 'file');
+    if (Number(file.size ?? 0) > AUTO_DOWNLOAD_MAX_BYTES) {
+      this.noteOversized(chat, chatId, name, { size: Number(file.size), fileId: String(file.id ?? ''), source: '私聊文件' });
+      return;
+    }
     try {
-      const file = msg.file ?? {};
       let buf: Buffer | null = null;
-      let name = String(file.name ?? 'file');
       if (file.url) buf = await downloadToBuffer(String(file.url));
       else if (file.id) {
         const r = await this.call('get_image', fileIdParams(file.id)).catch(() => null);
@@ -430,8 +476,26 @@ export class OneBot11Adapter implements TransportAdapter {
         this.bus.emit('adapter.file_received', { chatId, userId: chatId, name, rel });
       }
     } catch (e) {
-      this.log.warn(`私聊文件落盘失败: ${(e as Error).message}`);
+      if (/文件过大/.test((e as Error).message)) {
+        this.noteOversized(chat, chatId, name, { fileId: String(file.id ?? ''), url: String(file.url ?? ''), source: '私聊文件' });
+      } else {
+        this.log.warn(`私聊文件落盘失败: ${(e as Error).message}`);
+      }
     }
+  }
+
+  /**
+   * 按文件号换一个可下载地址（work 的 fetch_file 用）：群文件/私聊文件/消息附件被体积闸
+   * 拦下后登记在 pending_files，按需拉取时先来这里换临时链接（QQ 的直链几分钟就过期，
+   * 存表里的 url 只当备胎）。image 类走 get_image，其余走 get_file；两家键名差异见 fileIdParams。
+   */
+  async fetchFileUrl(fileId: string, kind: 'image' | 'file'): Promise<string> {
+    const f = String(fileId ?? '').trim();
+    if (!f) return '';
+    const action = kind === 'image' ? 'get_image' : 'get_file';
+    const r = await this.call(action, fileIdParams(f), 5000).catch(() => null);
+    const url = String(r?.url ?? '');
+    return /^https?:\/\//.test(url) ? url : '';
   }
 
   // ---------------- 动作调用 ----------------

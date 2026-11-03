@@ -1,6 +1,8 @@
 import { join, dirname } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { existsSync, readdirSync, mkdirSync } from 'node:fs';
+import { existsSync, readdirSync, mkdirSync, createWriteStream, statSync, rmSync } from 'node:fs';
+import { Readable, PassThrough } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import type {
   PluginContext, PluginHooks, PluginManifest, ToolDef, ChatEvent, ChatRef, Role, ToolContext,
   WorkDelegateInput, WorkDispatchInput, GatedHumanlike, LLMRequestContext, WorkAgentDef, PluginHttpHandler,
@@ -24,7 +26,7 @@ import type { Logger } from './types.ts';
 import { McpStdioClient } from './services/mcp.ts';
 import { resolveWorkAgent, discoverWorkAgents, resolveWorkAgentByName, ENTRY_AGENT_NAME } from './work-agent.ts';
 import { composeContinueTask, composeTaskResume } from './work-prompt.ts';
-import { sandboxRefOfKey } from './services/work.ts';
+import { sandboxRefOfKey, type WorkRunInput } from './services/work.ts';
 import { atomicWriteJson, readJson } from './util/fsutil.ts';
 import { clip, newId, nowMs } from './util/misc.ts';
 
@@ -82,6 +84,8 @@ export class PluginContainer {
       notifyOwner: (text: string) => Promise<void>;
       /** 群名解析（work 会话节里展示"QQ 群聊「名字」"用） */
       groupTitle: (chatId: string) => string;
+      /** fetch_file 按需拉大文件：协议端换临时链接的桥（OneBot get_image / get_file） */
+      protocolFileUrl?: (fileId: string, kind: 'image' | 'file') => Promise<string>;
     },
   ) {
     this.log = deps.loggerFactory('container');
@@ -422,7 +426,9 @@ export class PluginContainer {
   }
 
   /**
-   * 继续一次被打断的 work：按原任务重开一轮（同一发起人的沙箱还在，产物不用重做）。
+   * 继续一次被打断的 work：接着**同一场对话**重开一轮（2026-11-03 起；此前的会话记录与
+   * 同发起人沙箱由 WorkRunner 落盘/沿用，产物与过程都不用重做）。task 只放这次的增量，
+   * 空着就是「继续把上次没做完的活做完」。
    * 汇报仍由 WorkRunner 的 work.done 触发 pipeline 的 chat 汇报轮（trigger='chat'）；
    * 正常派活仍走 work_dispatch，这条只给桌面端/内核自用（例如内核重启后接着跑）。
    */
@@ -444,13 +450,19 @@ export class PluginContainer {
     const agent = this.workAgent();
     const all = this.listWorkAgents();
     const role = input.role;
-    // 2026-10-25 任务隔离：续跑要沿用原任务的沙箱（桌面端/内核自用的续跑入口）。
-    // 找不到原沙箱（老行）就按新任务开——文件在新沙箱里没有，但任务原文还在。
+    // 续跑要接上原任务的同一场对话（会话记录在任务沙箱里，WorkRunner 负责）。
+    // 老行没有 sandbox_key（2026-10-25 之前）：退回拼接任务文按新沙箱开——文件没了，任务原文还在。
     const prev = input.runId ? this.deps.work.runForUser(input.runId, input.userId) : this.deps.work.runForUser(undefined, input.userId);
     const sandboxRef = prev?.sandboxKey ? sandboxRefOfKey(prev.sandboxKey) : undefined;
+    const instruction = String(input.task ?? '').trim() || '继续把上次没做完的活做完。';
+    // 老行没有 sandbox_key：会话记录也不在（那时还没有它），退回把原始任务原文拼进任务文
+    const task = prev && !prev.sandboxKey
+      ? composeTaskResume({ task: prev.origTask ?? prev.task }, instruction)
+      : instruction;
     void this.deps.work.run({
       chat,
-      task: input.task,
+      task,
+      taskLabel: prev ? `${clip(prev.task, 24)}（续）` : task,
       userId: input.userId,
       nickname: input.nickname,
       role,
@@ -462,9 +474,117 @@ export class PluginContainer {
       groupTitle: this.deps.groupTitle(chat.chatId),
       runHooks: (req) => this.runWorkHooks(req),
       sandboxRef,
+      continuation: prev?.sandboxKey
+        ? { kind: 'resume', runId: prev.id, sandboxKey: prev.sandboxKey, origTask: prev.origTask ?? undefined }
+        : undefined,
     }).catch(() => { /* run() 内部已把失败落进事件与报错中心 */ });
     return { ok: true };
   }
+
+  // =============== 超大文件按需拉取（work 的 fetch_file 工具，2026-11-03） ===============
+  //
+  // 16MB 的自动下载闸把大文件拦在沙箱外时，适配器把它们登记进 pending_files（名字/文件号/体积）。
+  // work 在任务里需要那份文件时，fetch_file 先列清单、再按名字把文件拉进任务沙箱 inbox——
+  // 换临时链接 → 流式落临时文件（不整份进内存）→ importFile 收进沙箱 → 删登记行。
+
+  /** fetch_file 的单文件上限：自动下载闸（16MB）的 20 倍，一部无损专辑或一段长视频都放得下 */
+  static FETCH_MAX_BYTES = 320 * 1024 * 1024;
+
+  /** 登记簿里这个会话（或这个人）发过、但没自动进沙箱的文件（最新在前） */
+  listOversizedFiles(chatId: string, userId: string): { id: number; name: string; size: number; userId: string; at: number }[] {
+    try {
+      this.deps.db.run('DELETE FROM pending_files WHERE ts < ?', nowMs() - 7 * 24 * 3600_000);
+      const rows = this.deps.db.all<any>(
+        `SELECT id, name, size, user_id, ts FROM pending_files
+         WHERE chat_id=? OR user_id=? ORDER BY ts DESC LIMIT 20`,
+        chatId, userId,
+      );
+      return rows.map((r: any) => ({
+        id: Number(r.id), name: String(r.name ?? 'file'),
+        size: Number(r.size ?? 0), userId: String(r.user_id ?? ''), at: Number(r.ts ?? 0),
+      }));
+    } catch { return []; }
+  }
+
+  /** 按名字（可只写一段，空 = 最新一条）把登记过的大文件拉进任务沙箱；成功后登记行删除 */
+  async fetchOversizedFile(input: {
+    chat: ChatRef; chatId: string; userId: string; match: string;
+  }): Promise<{ ok: true; rel: string; size: number; name: string } | { ok: false; error: string }> {
+    const cap = PluginContainer.FETCH_MAX_BYTES;
+    let rows: any[] = [];
+    try {
+      this.deps.db.run('DELETE FROM pending_files WHERE ts < ?', nowMs() - 7 * 24 * 3600_000);
+      rows = this.deps.db.all<any>(
+        'SELECT id, name, size, file_id, url FROM pending_files WHERE chat_id=? OR user_id=? ORDER BY ts DESC LIMIT 20',
+        input.chatId, input.userId,
+      );
+    } catch (e) {
+      return { ok: false, error: `登记簿查不了: ${(e as Error).message}` };
+    }
+    const want = String(input.match ?? '').trim().toLowerCase();
+    const row = want
+      ? rows.find((r) => String(r.name ?? '').toLowerCase().includes(want))
+      : rows[0];
+    if (!row) {
+      const names = rows.slice(0, 5).map((r) => r.name);
+      return { ok: false, error: want
+        ? `登记簿里没有名字带「${input.match}」的文件${names.length ? `；现有：${names.join('、')}` : '（登记簿是空的）'}`
+        : '登记簿是空的：没有「太大没自动进沙箱」的文件（小于 16MB 的都已经在 inbox/ 里了）' };
+    }
+    const name = String(row.name ?? 'file');
+    // 换临时链接：QQ 的直链几分钟就过期，存表里的 url 只当协议端答不上来的备胎
+    const ext = (/\.([A-Za-z0-9]+)$/.exec(name)?.[1] ?? '').toLowerCase();
+    const kind = ['jpg', 'jpeg', 'png', 'gif', 'webp'].includes(ext) ? 'image' as const : 'file' as const;
+    let url = '';
+    if (row.file_id && this.deps.protocolFileUrl) {
+      url = await this.deps.protocolFileUrl(String(row.file_id), kind).catch(() => '');
+    }
+    if (!/^https?:\/\//.test(url)) url = String(row.url ?? '');
+    if (!/^https?:\/\//.test(url)) {
+      return { ok: false, error: `拿不到「${name}」的下载地址（协议端答不上来，旧链接也过期了）——让用户重发一次这个文件` };
+    }
+
+    // 流式落临时文件：几百 MB 不能整份吞进内存（downloads/ 复用代下载安装包的目录）
+    mkdirSync(join(this.dirs.dataDir, 'downloads'), { recursive: true });
+    const tmp = join(this.dirs.dataDir, 'downloads', `fetch_file-${nowMs()}-${this.fetchSeq++}.part`);
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 15 * 60_000);
+    let bytes = 0;
+    try {
+      const resp = await fetch(url, { redirect: 'follow', signal: ctrl.signal });
+      if (!resp.ok || !resp.body) return { ok: false, error: `下载失败 HTTP ${resp.status}` };
+      const declared = Number(resp.headers.get('content-length') ?? 0);
+      if (declared > cap) return { ok: false, error: `文件太大（${(declared / 1048576).toFixed(0)} MB > 上限 ${(cap / 1048576).toFixed(0)} MB）` };
+      const counter = new PassThrough();
+      counter.on('data', (c: Buffer) => {
+        bytes += c.length;
+        if (bytes > cap) ctrl.abort();
+      });
+      await pipeline(Readable.fromWeb(resp.body as any), counter, createWriteStream(tmp));
+      // 重名避让与 saveInbox 同一口径（_1 后缀）：fetch 来的也是 inbox 文件，别顶掉已有的
+      const safe = name.replace(/[\\/:*?"<>|\r\n]/g, '_').trim().slice(0, 120) || 'file';
+      const root = this.deps.sandbox.root(input.chat);
+      let rel = `inbox/${safe}`;
+      for (let i = 1; existsSync(join(root, rel)); i++) {
+        const dot = safe.lastIndexOf('.');
+        rel = `inbox/${dot > 0 ? `${safe.slice(0, dot)}_${i}${safe.slice(dot)}` : `${safe}_${i}`}`;
+      }
+      const saved = this.deps.sandbox.importFile(input.chat, rel, tmp);
+      this.deps.db.run('DELETE FROM pending_files WHERE id=?', row.id);
+      return { ok: true, rel: saved.relPath, size: saved.size, name };
+    } catch (e) {
+      const aborted = (e as Error).name === 'AbortError';
+      return { ok: false, error: aborted
+        ? bytes > cap
+          ? `文件超过 ${(cap / 1048576).toFixed(0)} MB 上限，下载到一半就停了`
+          : '下载超时（15 分钟没拉完）——QQ 大文件的服务器偶尔就是这么慢，等会儿再试一次'
+        : `下载失败: ${(e as Error).message}` };
+    } finally {
+      clearTimeout(timer);
+      rmSync(tmp, { force: true });
+    }
+  }
+  private fetchSeq = 0;
 
   /**
    * work 轮的插件钩子链（beforeWorkLLM）。与 chat 的 beforeLLM 是两条独立链：
@@ -980,21 +1100,34 @@ function makeGatedWork(
       const chat = input.chat;
       const role = input.role as Role;
       // 续接的优先级：还在等回答的提问现场 > chat 模型点名的旧任务 > 全新任务。
-      // 2026-10-25 任务隔离：续接必须沿用旧任务的沙箱 ref（文件/容器都在那），新任务才开新沙箱。
+      // 2026-10-25 任务隔离：续接必须沿用旧任务的沙箱（文件/容器都在那），新任务才开新沙箱。
+      // 2026-11-03 起续接还接**同一场对话**（continuation）：上次 run 的完整会话记录随沙箱落盘，
+      // WorkRunner 负责播种——task 只放这次的增量；没有 runId/沙箱键的老现场才退回拼接任务文。
       const pending = deps.work.takePending(input.userId);
       let task = input.task;
       let label = input.label?.trim() || input.task;
+      let continuation: WorkRunInput['continuation'] | undefined;
       let sandboxRef: ChatRef | undefined;
       if (pending) {
-        task = composeContinueTask(pending, input.task);
         label = `${pending.label}（续）`;
-        sandboxRef = pending.sandboxKey ? sandboxRefOfKey(pending.sandboxKey) : undefined;
+        if (pending.runId && pending.sandboxKey) {
+          continuation = {
+            kind: 'answer', runId: pending.runId, sandboxKey: pending.sandboxKey,
+            origTask: pending.origTask, question: pending.question, notes: pending.notes,
+          };
+        } else {
+          task = composeContinueTask(pending, input.task);
+          sandboxRef = pending.sandboxKey ? sandboxRefOfKey(pending.sandboxKey) : undefined;
+        }
       } else if (input.continueRun) {
         const prev = deps.work.runForUser(input.continueRun === 'latest' ? undefined : input.continueRun, input.userId);
         if (!prev) return { ok: false, reason: `没找到这个用户能续接的任务（${input.continueRun === 'latest' ? '最近没有任务' : `任务 ${input.continueRun} 不存在或不是他的`}）` };
-        task = composeTaskResume(prev, input.task);
         label = `${clip(prev.task, 24)}（续）`;
-        sandboxRef = prev.sandboxKey ? sandboxRefOfKey(prev.sandboxKey) : undefined;
+        if (prev.sandboxKey) {
+          continuation = { kind: 'resume', runId: prev.id, sandboxKey: prev.sandboxKey, origTask: prev.origTask ?? undefined };
+        } else {
+          task = composeTaskResume({ task: prev.origTask ?? prev.task }, input.task);
+        }
       }
       void deps.work.run({
         chat,
@@ -1011,6 +1144,7 @@ function makeGatedWork(
         groupTitle: deps.groupTitle(chat.chatId),
         runHooks: (req) => plugins.runWorkHooks(req),
         sandboxRef,
+        continuation,
         attachments: input.attachments,
       }).catch(() => { /* run() 内部已把失败落进事件与报错中心 */ });
       return { ok: true, label };
@@ -1018,6 +1152,17 @@ function makeGatedWork(
 
     /** 该会话里这位发起人自己的进度（别人的活不返回） */
     status: (userId: string) => deps.work.liveStatus(userId),
+
+    /** fetch_file：登记过的大文件清单（这个会话或这个人发的） */
+    listOversizedFiles: (chatId: string, userId: string) => {
+      can();
+      return plugins.listOversizedFiles(chatId, userId);
+    },
+    /** fetch_file：把登记过的大文件按名字拉进任务沙箱 inbox（成功后登记行删除） */
+    fetchOversizedFile: (chat: ChatRef, chatId: string, userId: string, match: string) => {
+      can();
+      return plugins.fetchOversizedFile({ chat, chatId, userId, match });
+    },
   };
 }
 

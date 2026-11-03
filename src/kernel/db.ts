@@ -175,6 +175,26 @@ export class Db {
     // 2026-10-25 任务隔离改版：沙箱不再挂群聊，任务沙箱键（private_u{userId}__t{taskId}）落这列；
     // 老行为 NULL，回退按 chat_key+user_id 拼旧式 key
     addWorkCol('sandbox_key', 'TEXT');
+    // 2026-11-03 同会话续接：原始任务原文（未经续接拼接）。拼接兜底/桌面端续跑用它，
+    // 续接文不再拿上一版拼接文当原料（嵌套滚雪球的根）。
+    addWorkCol('orig_task', 'TEXT');
+
+    // 用户发来但太大、没能自动进沙箱的文件（>16MB 的群文件/私聊文件/视频）登记在这：
+    // work 的 fetch_file 工具按需再拉一次（取回成功就删行）。7 天前的行由插入方顺手清。
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS pending_files (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_type TEXT,
+        chat_id TEXT,
+        user_id TEXT,
+        name TEXT,
+        size INTEGER,
+        file_id TEXT,
+        url TEXT,
+        ts INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_pending_files_chat ON pending_files(chat_id, ts);
+    `);
     this.repairFts();
     this.migrateUsageModel();
   }

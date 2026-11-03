@@ -956,7 +956,8 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
         return send({ ok: true, deleted: kernel.workRunner.deleteRuns(ids) });
       }
       if (b === 'resume' && req.method === 'POST') {
-        // 继续一次中断的 work：按 runId 取原任务（可被 body.task 覆盖），在同一发起人沙箱里重开一轮。
+        // 继续一次中断的 work：接**同一场对话**续跑（上次 run 的会话记录随任务沙箱落盘）。
+        // body.task 只放这次的增量（缺省 = 一句「继续」），完整前因后果由会话历史自己带。
         // 汇报仍走 work.done → pipeline 的 chat 汇报轮（trigger='chat'）。
         const runId = String(body.runId ?? '').trim();
         const row = runId
@@ -966,8 +967,8 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
         if (runId && !row) return send({ error: `没有运行 ${runId}` }, 404);
         const chatKey = String(body.chatKey ?? row?.chat_key ?? '').trim();
         const userId = String(body.userId ?? row?.user_id ?? '').trim();
-        const task = String(body.task ?? row?.task ?? '').trim();
-        if (!chatKey || !userId || !task) return send({ error: 'chatKey / userId / task 不能为空' }, 400);
+        const task = String(body.task ?? '').trim();
+        if (!chatKey || !userId) return send({ error: 'chatKey / userId 不能为空' }, 400);
         const cfg = kernel.config.config as any;
         const role = (cfg.masterIds ?? []).includes(userId)
           ? 'owner'

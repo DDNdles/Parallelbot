@@ -1,6 +1,6 @@
 import { spawn, execFile } from 'node:child_process';
 import { join, resolve, sep, normalize, dirname, relative, isAbsolute } from 'node:path';
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, lstatSync, realpathSync, rmSync, existsSync, unlinkSync, copyFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, lstatSync, realpathSync, rmSync, existsSync, unlinkSync, copyFileSync, renameSync } from 'node:fs';
 import type { Db } from '../db.ts';
 import type { ErrorCenter } from '../errors.ts';
 import type { ConfigStore } from '../config.ts';
@@ -61,6 +61,20 @@ const VISION_IMAGE_MIME: Record<string, string> = {
 };
 /** 单张图片的上限：base64 会再涨三分之一，再大就把请求体顶到对端拒收 */
 const VISION_IMAGE_MAX = 8 * 1024 * 1024;
+
+/**
+ * 按文件头认真实图片类型。QQ 存附件只看哈希名，GIF 动图落成 .jpg 是常事（2026-11-03 实锤：
+ * 迷宫任务里 inbox 一张 165KB 的"jpg"其实是 GIF89a）——只按扩展名声明 mime，网关会以
+ * 「Declared image type does not match its bytes」整发 400，那一轮模型请求当场报废。
+ * 认不出返回 undefined（调用方决定当文本读还是报错），别再猜。
+ */
+export function sniffImageMime(head: Buffer): string | undefined {
+  if (head.length >= 8 && head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47) return 'image/png';
+  if (head.length >= 3 && head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg';
+  if (head.length >= 12 && head.subarray(0, 4).toString('ascii') === 'RIFF' && head.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  if (head.length >= 6 && (head.subarray(0, 6).toString('ascii') === 'GIF87a' || head.subarray(0, 6).toString('ascii') === 'GIF89a')) return 'image/gif';
+  return undefined;
+}
 
 /** 交给系统默认程序不会触发脚本执行的类型；不在此列的一律只在文件管理器里选中 */
 const SAFE_OPEN_EXT = new Set([
@@ -316,14 +330,23 @@ export class SandboxService {
     /**
    * 把沙箱里的图片读成模型的视觉输入（base64）：`sandbox_read` 读到图片走这条。
    * 非图片扩展名返回 null（调用方退回按文本读）；文件不存在/过大照实抛错。
+   * mime 按**文件头**认（嗅不到或不是能看的图就抛错，见 sniffImageMime）——
+   * 扩展名只是参考，按它声明会被网关整发 400（GIF 冒充 jpg 的事故，2026-11-03）。
    * 不收图的模型由 agent loop 统一丢弃并留 warn，这里不做模型能力判断。
    */
   readImage(chat: ChatRef, relPath: string): { data: string; mime: string; size: number } | null {
     const abs = this.resolveInside(chat, relPath);
     const ext = /\.([A-Za-z0-9]+)$/.exec(abs)?.[1]?.toLowerCase() ?? '';
-    const mime = VISION_IMAGE_MIME[ext];
-    if (!mime) return null;
+    if (!VISION_IMAGE_MIME[ext]) return null;
     if (!existsSync(abs) || !statSync(abs).isFile()) throw new SandboxError(`文件不存在: ${relPath}`);
+    const buf = readFileSync(abs);
+    const real = sniffImageMime(buf);
+    if (!real) {
+      throw new SandboxError(
+        `这个文件扩展名是 .${ext}，但内容不是 PNG/JPEG/WebP/GIF（可能是 HEIC/AVIF 等手机格式或损坏文件）。` +
+        `先用 Python（PIL 可用）转成 png 再用 sandbox_read 看。`,
+      );
+    }
     const st = statSync(abs);
     if (st.size > VISION_IMAGE_MAX) {
       throw new SandboxError(
@@ -331,7 +354,7 @@ export class SandboxService {
       );
     }
     this.touchFile(chat, relPath, st.size);
-    return { data: readFileSync(abs).toString('base64'), mime, size: st.size };
+    return { data: buf.toString('base64'), mime: real, size: st.size };
   }
 
 /** 桌面端预览：文本文件给内容（按字符截断，不切坏中文），二进制给 null（由 UI 决定改走系统程序打开） */
@@ -412,6 +435,33 @@ export class SandboxService {
     writeFileSync(abs, data);
     this.touchFile(chat, relPath, data.length);
     return { relPath: relPath.replace(/\\/g, '/'), size: data.length, added: diff?.added, removed: diff?.removed };
+  }
+
+  /**
+   * 把内核已下载到临时位置的文件收进沙箱（work 的 fetch_file 用）。
+   *
+   * 大文件不走 write()：那份要先把整个文件读进内存。这里直接把临时文件**改名**进沙箱
+   * （跨盘改不动就复制后删源）；配额校验与 touch 与 write 同一套口径。
+   */
+  importFile(chat: ChatRef, relPath: string, srcPath: string): SandboxWriteResult {
+    const abs = this.resolveInside(chat, relPath);
+    const st = statSync(srcPath);
+    const cfg = this.config.config.sandbox as any;
+    const fileCap = cfg.workMaxFileBytes ?? cfg.maxFileBytes * 5;
+    if (st.size > fileCap) throw new SandboxError(`写入被拒绝：单文件上限 ${fileCap} 字节（本文件 ${st.size} 字节）`);
+    const sessionCap = cfg.workMaxSessionBytes ?? cfg.maxSessionBytes;
+    if (this.sessionBytes(this.chatKey(chat)) + st.size > sessionCap) {
+      throw new SandboxError(`写入被拒绝：会话总占用将达到配额上限（${sessionCap} 字节），请先清理旧文件`);
+    }
+    mkdirSync(join(abs, '..'), { recursive: true });
+    try {
+      renameSync(srcPath, abs);
+    } catch {
+      copyFileSync(srcPath, abs);
+      rmSync(srcPath, { force: true });
+    }
+    this.touchFile(chat, relPath, st.size);
+    return { relPath: relPath.replace(/\\/g, '/'), size: st.size };
   }
 
   delete(chat: ChatRef, relPath: string): void {

@@ -10,9 +10,9 @@ import type { SandboxService } from './sandbox.ts';
 import type { ToolDef, ChatMessage, ChatRef, LLMRequestContext, MessageAttachment, WorkAgentDef, WorkLiveStatus } from '../types.ts';
 import { newId, nowMs, clip } from '../util/misc.ts';
 import { busEvents } from '../bus.ts';
-import { buildWorkSections, parseWorkHandoff, type PendingAsk } from '../work-prompt.ts';
+import { buildWorkSections, composeContinueTask, composeTaskResume, parseWorkHandoff, type PendingAsk } from '../work-prompt.ts';
 import { DEFAULT_WORK_AGENT } from '../work-agent.ts';
-import { readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { ARTIFACT_SKIP_DIRS, ARTIFACT_SKIP_FILE, isDeliverableArtifact } from './artifacts.ts';
 
@@ -71,6 +71,27 @@ export interface WorkRunInput {
    * （`private_u{userId}__t{runId}`）；子代理委派不传它——父层已把任务 ref 放进 input.chat。
    */
   sandboxRef?: ChatRef;
+  /**
+   * 续接：接着上一次 run 的**同一场对话**继续（2026-11-03 起）。
+   * 上次 run 的完整会话记录（全部轮次、思考、工具往返）随任务沙箱落盘，续接时原样播种进
+   * 新一轮的上下文——模型像普通 harness 一样在同一会话里继续（模型链挂了换个模型接着跑也是它），
+   * 而不是只带着一段拼接的任务文字冷启动。会话记录丢了（内核崩在中途/记录超限没落盘）才退回
+   * 旧的拼接任务文：composeContinueTask / composeTaskResume。
+   * `task` 这时只放**这次的增量**（回答/新指示），完整前因后果由会话历史自己带。
+   */
+  continuation?: {
+    /** 'answer' = 回答上次的 work_ask；'resume' = 用户点名继续某个旧任务 */
+    kind: 'answer' | 'resume';
+    /** 要接续的那次 run（读它的会话记录） */
+    runId: string;
+    /** 那次 run 的任务沙箱键 */
+    sandboxKey: string;
+    /** 原始任务原文（未经续接拼接；拼接兜底时用它，防任务文嵌套滚雪球） */
+    origTask?: string;
+    /** work_ask 的问题与已做到（kind='answer' 时给） */
+    question?: string;
+    notes?: string;
+  };
   /** 随任务交给 work 的附件（用户这一轮发的图片）：挂在 work 第一轮的最后一条 user 消息上 */
   attachments?: MessageAttachment[];
 }
@@ -306,14 +327,17 @@ export class WorkRunner {
     let steerEntry: { steer: (text: string) => boolean; record: (text: string) => void } | undefined;
     try {
     const chatKey = `${input.chat.type}_${input.chat.chatId}`;
+    const cont = input.continuation;
     /**
      * 执行面 = 任务隔离（2026-10-25 用户定）：用户层（`private_u{userId}`，跨群/跨私聊同一份）
      * 之上每个任务一份独立沙箱；群聊不再是一层隔离。汇报/落库/桌面端仍按聊天聚合（chatKey）。
      * - 新任务：现发 `private_u{userId}__t{runId}`，谁也看不到别的任务的文件；
-     * - 续接（input.sandboxRef 由 dispatch/resume 带来）沿用旧任务的同一份沙箱；
+     * - 续接（continuation 由 dispatch/resume 带来；sandboxRef 是老调用方的兜底）沿用旧任务的
+     *   同一份沙箱，**并接上同一场对话**（见 priorMessages）；
      * - 子代理委派：父层已把任务 ref 放进 input.chat（scope 以 t 开头），直接沿用。
      */
-    const chat: ChatRef = input.sandboxRef
+    const chat: ChatRef = (cont?.sandboxKey ? sandboxRefOfKey(cont.sandboxKey) : undefined)
+      ?? input.sandboxRef
       ?? (input.chat.scope && input.chat.scope.startsWith('t')
         ? input.chat
         : { platform: input.chat.platform, type: 'private', chatId: `u${input.userId}`, scope: `t${id.replace(/^work_/, '')}` });
@@ -324,6 +348,47 @@ export class WorkRunner {
     const depth = input.depth ?? 0;
     const agentName = (input.agent ?? DEFAULT_WORK_AGENT).name;
     const taskLabel = input.taskLabel ?? input.task;
+    /** 原始任务原文：新任务就是任务本身；续接由调用方从上一场带来（防拼接文越滚越长） */
+    const origTask = cont?.origTask ?? (cont ? undefined : input.task);
+    /**
+     * 续接的任务文与上一场的会话记录。
+     *
+     * 记录还在 → `task` 只放这次的增量（回答 / 新指示），完整前因后果模型在播种进来的历史里
+     * 自己看得见；记录丢了才退回把旧任务原文整个拼进任务文的老办法（2026-10-25 交接式续接）。
+     * 老办法有个滚雪球缺陷：上一版的拼接文会被再包一层，续五轮之后任务文里出现五份嵌套的
+     * 原始任务（work_0bb601… 实锤）——拼接兜底一律用 origTask，不再拿上一版拼接文当原料。
+     */
+    let task = input.task;
+    let priorMessages: unknown[] | undefined;
+    if (cont) {
+      priorMessages = this.loadTranscript(chat, cont.runId);
+      if (priorMessages?.length) {
+        task = cont.kind === 'answer'
+          ? [
+              '【回到上次没做完的活】',
+              `你上次停下来问发起者的：${cont.question ?? ''}`,
+              cont.notes ? `（当时你已经做到：${cont.notes}）` : '',
+              '',
+              `发起者这次说的是：${input.task}`,
+              '',
+              '这是同一场对话的继续：上次的全部过程都在上面的历史里。「发起者这次说的是」就是他对那个问题的回答——若读起来是另一件事，就按新任务做。',
+            ].filter(Boolean).join('\n')
+          : [
+              '【继续上次的工作】',
+              `发起者这次的指示：${input.task}`,
+              '',
+              '这是同一场对话的继续：上次的全部过程都在上面的历史里，接着干，别从零重来；',
+              '若这条指示读起来是另一件事，就按新任务做。',
+            ].join('\n');
+      } else if (cont.kind === 'answer') {
+        task = composeContinueTask(
+          { task: cont.origTask ?? '', question: cont.question ?? '', notes: cont.notes },
+          input.task,
+        );
+      } else {
+        task = composeTaskResume({ task: cont.origTask ?? input.task }, input.task);
+      }
+    }
     /** 汇报轮的投递目标：**聊天级**（不带 scope），由内核在收尾后另起一轮人格化汇报 */
     const reportChat = { platform: input.chat.platform, type: input.chat.type, chatId: input.chat.chatId };
     const rec = {
@@ -334,10 +399,10 @@ export class WorkRunner {
     this.bus.emit(busEvents.workStart, {
       // 任务原样下发：chat → work 没有字数上限（2026-10-23 用户明令），桌面端按完整原文显示
       // （列表/侧栏的短标走 rec.task，别拿它顶替全文）
-      id, chatKey, task: input.task, model, trigger: input.trigger, chat: reportChat,
+      id, chatKey, task, model, trigger: input.trigger, chat: reportChat,
       userId: input.userId, nickname: input.nickname, depth, parentId: input.parentId, agent: agentName,
     });
-    this.persist('start', rec, input);
+    this.persist('start', rec, input, undefined, task);
 
     // 出发前记一笔会话 token 账，跑完相减 = 这次任务自己的消耗与缓存命中
     const usageBefore = this.llm.usageSnapshot(input.chat.chatId);
@@ -379,7 +444,7 @@ export class WorkRunner {
         nickname: input.nickname,
         userId: input.userId,
         role: input.role,
-        task: input.task,
+        task,
         tools: input.tools,
         sandboxRoot: this.sandbox.root(chat),
         trigger: input.trigger,
@@ -389,14 +454,14 @@ export class WorkRunner {
       let ctx: LLMRequestContext = {
         chat,
         reportChat,
-        event: { platform: reportChat.platform, type: reportChat.type, chatId: reportChat.chatId, userId: input.userId, nickname: input.nickname, text: input.task, role: input.role } as any,
+        event: { platform: reportChat.platform, type: reportChat.type, chatId: reportChat.chatId, userId: input.userId, nickname: input.nickname, text: task, role: input.role } as any,
         system: built.system,
         systemSections: built.sections,
-        messages: [{ role: 'user', content: input.task } as ChatMessage],
+        messages: [{ role: 'user', content: task } as ChatMessage],
         attachments: input.attachments,
         tools: input.tools,
         workTurn: true,
-        workTask: input.task,
+        workTask: task,
         workAgent: agent,
         workTrigger: input.trigger === 'subagent' ? undefined : input.trigger,
         workDepth: depth,
@@ -405,12 +470,14 @@ export class WorkRunner {
       };
       if (input.runHooks) ctx = await input.runHooks(ctx);
 
-      const { reply, rounds, toolCalls, steps, finished } = await this.agentLoop.run(ctx, {
+      const { reply, rounds, toolCalls, steps, finished, error: loopError, messages: transcript } = await this.agentLoop.run(ctx, {
         chatKey,
         abort: input.abort,
         // 轮次：work 轮不设上限（2026-10-23 用户定）；agent 定义里的 max_rounds 不再参与截断
         // 模型链：由 agent 定义决定（缺省 work；子代理可声明 chain: chat）
         chain: agent.chain ?? 'work',
+        // 续接同会话：上一场的完整对话原样在前（2026-11-03 起 work 续接的语义）
+        priorMessages,
         // 纯文字轮的提醒等待（缺省 60s；测试调小）
         workIdleRemindMs: input.idleRemindMs,
         // 每一步（工具调用）推给桌面端
@@ -444,6 +511,9 @@ export class WorkRunner {
         },
       });
 
+      // 会话记录随任务沙箱落盘：下一次「继续」就从这里接上（报错收场也存——
+      // 那正是最需要「接着上次的现场继续」而不是从头再跑的情形）。
+      this.saveTranscript(chat, id, transcript ?? []);
       // 结论与产物：优先用交付格式里的结构化字段，解析不到就回落到全文 + 正则兜底；
       // 最后再补扫沙箱——模型常用 run_bash/Python 直接写文件，不会经过 sandbox_write 的 artifact 回执。
       const handoff = parseWorkHandoff(reply);
@@ -461,7 +531,9 @@ export class WorkRunner {
       const unfinished = !finished && !ask && !input.abort?.aborted && reply.trim().length > 0;
       if (!ask && (!reply.trim() || unfinished)) {
         const err = !reply.trim()
-          ? '模型链没有返回任何内容（请检查模型接入与额度）'
+          // 重试两次都没救回来的报错原样带回（「400 图片保存失败…」「fetch failed」）——
+          // 不再一句「没有返回任何内容」让排障从零猜（2026-11-03 迷宫任务两次事故的教训）
+          ? loopError ? `模型请求失败：${loopError}` : '模型链没有返回任何内容（请检查模型接入与额度）'
           : `模型连续 ${WORK_IDLE_REMIND_LIMIT} 次提醒后仍未调用 work_finish 交付，任务按未完成处理（最后输出已保留在摘要里）`;
         const result: WorkRunResult = {
           id, ok: false, sandboxKey, summary: clip(reply, 300), rounds, toolCalls,
@@ -475,7 +547,7 @@ export class WorkRunner {
           id, chatKey, error: err, model, trigger: input.trigger, chat: reportChat,
           userId: input.userId, nickname: input.nickname, role: input.role, task: taskLabel, result,
         });
-        this.persist('error', rec, input, result);
+        this.persist('error', rec, input, result, task);
         this.pruneFinishedRuns();
         return result;
       }
@@ -489,11 +561,12 @@ export class WorkRunner {
       };
       const r = this.runs.get(id);
       if (r) Object.assign(r, result, { steps, phase: (ask ? 'await' : 'done') as RunRecord['phase'], finishedAt: nowMs() });
-      // 停下来提问：记下现场，等**同一个人**回答后接着干（子代理的提问回给父代理，不记在聊天上）
+      // 停下来提问：记下现场，等**同一个人**回答后接着干（子代理的提问回给父代理，不记在聊天上）。
+      // 带上 runId 与原始任务原文：回答来时走同一场对话续接（没有这两个字段的老现场走拼接兜底）。
       if (ask && input.trigger !== 'subagent') {
         this.pending.set(this.pendingKey(input.userId), {
-          task: input.task, label: taskLabel, question: ask.question, notes: ask.notes,
-          at: nowMs(), userId: input.userId, sandboxKey,
+          task, label: taskLabel, question: ask.question, notes: ask.notes,
+          at: nowMs(), userId: input.userId, sandboxKey, runId: id, origTask,
         });
       }
       this.bus.emit(busEvents.workDone, {
@@ -503,7 +576,7 @@ export class WorkRunner {
         trigger: input.trigger, chat: reportChat, userId: input.userId, nickname: input.nickname,
         role: input.role, task: taskLabel, result,
       });
-      this.persist(ask ? 'await' : 'done', rec, input, result);
+      this.persist(ask ? 'await' : 'done', rec, input, result, task);
       this.pruneFinishedRuns();
       return result;
     } catch (e) {
@@ -524,7 +597,7 @@ export class WorkRunner {
         id, chatKey, error: err, model, trigger: input.trigger, chat: reportChat,
         userId: input.userId, nickname: input.nickname, role: input.role, task: taskLabel, result,
       });
-      this.persist('error', rec, input, result);
+      this.persist('error', rec, input, result, task);
       this.pruneFinishedRuns();
       return result;
     }
@@ -594,6 +667,62 @@ export class WorkRunner {
       } catch { /* 表缺失不影响内存删除 */ }
     }
     return gone.size;
+  }
+
+  // =============== 会话记录（同一场对话的续接，2026-11-03） ===============
+  //
+  // 一次 run 的完整对话（pi 消息：轮次/思考/工具往返/压缩后的摘要）在收尾时随任务沙箱落盘；
+  // dispatch/resume 带 continuation 来续接时，把上一场的记录原样播种进新一轮的上下文——
+  // 模型接着同一会话继续（模型挂了换个模型也是同一会话），而不是只带任务文字冷启动。
+  // 目录藏在任务沙箱里（. 开头：产物补扫、交付打包、技能装配都跳过它），沙箱清了记录自然跟着走。
+
+  /** 读上次 run 落盘的会话记录；那场没落盘（内核崩在中途）就沿同一沙箱往前找一场，最多回溯 5 场 */
+  private loadTranscript(chat: ChatRef, runId: string): unknown[] | undefined {
+    let id = /^[A-Za-z0-9_-]+$/.test(runId) ? runId : '';
+    const seen = new Set<string>();
+    for (let hop = 0; id && hop < 5 && !seen.has(id); hop++) {
+      seen.add(id);
+      try {
+        const p = join(this.sandbox.root(chat), '.agent-session', `${id}.json`);
+        if (existsSync(p)) {
+          const parsed = JSON.parse(readFileSync(p, 'utf-8'));
+          if (Array.isArray(parsed) && parsed.length) return parsed;
+        }
+      } catch { return undefined; /* 记录坏了当没有，走拼接兜底 */ }
+      id = this.prevRunIdOf(id);
+    }
+    return undefined;
+  }
+
+  /** 同一任务沙箱里、这场之前最近的一场（崩溃没落盘的那场跳过去） */
+  private prevRunIdOf(runId: string): string {
+    try {
+      const row = this.db.get<{ sandbox_key: string | null; ts: number }>(
+        'SELECT sandbox_key, ts FROM work_runs WHERE id=?', runId);
+      if (!row?.sandbox_key) return '';
+      const prev = this.db.get<{ id: string }>(
+        `SELECT id FROM work_runs WHERE sandbox_key=? AND id != ? AND ts <= ? AND phase != 'start'
+         ORDER BY ts DESC LIMIT 1`, row.sandbox_key, runId, row.ts);
+      return prev?.id ?? '';
+    } catch { return ''; }
+  }
+
+  /** 收尾时把本场完整对话落盘。末尾没跑完的报错轮摘掉——别让下一场开场就带着空 assistant 错误消息 */
+  private saveTranscript(chat: ChatRef, runId: string, messages: unknown[]): void {
+    try {
+      if (!/^[A-Za-z0-9_-]+$/.test(runId)) return;
+      const msgs = [...messages] as { role?: string; stopReason?: string }[];
+      while (msgs.length && msgs[msgs.length - 1]?.role === 'assistant' && msgs[msgs.length - 1]?.stopReason === 'error') msgs.pop();
+      if (!msgs.length) return;
+      const p = join(this.sandbox.root(chat), '.agent-session', `${runId}.json`);
+      const json = JSON.stringify(msgs);
+      // 极端长对话不落盘（读回来也顶爆上下文）：续接自然退回拼接任务文的老路
+      if (json.length > 24 * 1024 * 1024) return;
+      mkdirSync(join(p, '..'), { recursive: true });
+      const tmp = `${p}.tmp`;
+      writeFileSync(tmp, json);
+      renameSync(tmp, p); // 先写临时再改名：写一半崩掉不会留下半个会话
+    } catch { /* 落盘失败只影响下一次续接的完整性，任务本身照常收尾 */ }
   }
 
   /**
@@ -725,16 +854,17 @@ export class WorkRunner {
    * `userId`，这样才能定位到那个人自己的沙箱目录。内存里没有（内核重启过）就回落到
    * work_runs 表——那次交付确实发生过、文件也还在沙箱里。
    */
-  /** 最近任务（给续接定位）：按 runId 或「最近一个」取，必须属于本人——续别人的任务等于偷沙箱 */
-  runForUser(runId: string | undefined, userId: string): { id: string; task: string; sandboxKey: string | null } | undefined {
+  /** 最近任务（给续接定位）：按 runId 或「最近一个」取，必须属于本人——续别人的任务等于偷沙箱。
+   *  「最近一个」跳过 phase='start' 的行（那场还在跑或崩在了半路——在跑的活有 steer，不该再续一场） */
+  runForUser(runId: string | undefined, userId: string): { id: string; task: string; origTask: string | null; sandboxKey: string | null } | undefined {
     try {
       const row = runId
-        ? this.db.get<{ id: string; task: string; sandbox_key: string | null }>(
-            'SELECT id, task, sandbox_key FROM work_runs WHERE id=? AND user_id=? LIMIT 1', runId, userId)
-        : this.db.get<{ id: string; task: string; sandbox_key: string | null }>(
-            "SELECT id, task, sandbox_key FROM work_runs WHERE user_id=? AND (trigger IS NULL OR trigger != 'subagent') ORDER BY ts DESC LIMIT 1", userId);
+        ? this.db.get<{ id: string; task: string; orig_task: string | null; sandbox_key: string | null }>(
+            'SELECT id, task, orig_task, sandbox_key FROM work_runs WHERE id=? AND user_id=? LIMIT 1', runId, userId)
+        : this.db.get<{ id: string; task: string; orig_task: string | null; sandbox_key: string | null }>(
+            "SELECT id, task, orig_task, sandbox_key FROM work_runs WHERE user_id=? AND (trigger IS NULL OR trigger != 'subagent') AND phase != 'start' ORDER BY ts DESC LIMIT 1", userId);
       if (!row) return undefined;
-      return { id: row.id, task: String(row.task ?? ''), sandboxKey: row.sandbox_key ?? null };
+      return { id: row.id, task: String(row.task ?? ''), origTask: row.orig_task ?? null, sandboxKey: row.sandbox_key ?? null };
     } catch { return undefined; }
   }
 
@@ -775,21 +905,23 @@ export class WorkRunner {
     return this.dbList(200, undefined).find((r) => r.id === id);
   }
 
-  private persist(phase: string, rec: any, input: WorkRunInput, result?: WorkRunResult): void {
+  private persist(phase: string, rec: any, input: WorkRunInput, result?: WorkRunResult, taskText?: string): void {
     try {
       // 落库的是**整份快照**（含 events 与 usage）：重启后抽屉还要按同一份数据画 loop、
       // 圆环、缓存与 TPS。运行中每来一条事件都写一次太重，所以 start/收尾各写一次，
       // 中途的事件靠内存；崩掉的那次至少留下已完结前的最近一次快照。
       const live = this.runs.get(rec.id);
+      // 原始任务原文（未经续接拼接）：续接兜底拼接、桌面端续跑都用它，防拼接文嵌套滚雪球
+      const origTask = input.continuation?.origTask ?? (input.continuation ? null : (taskText ?? input.task));
       this.db.run(
-        `INSERT INTO work_runs (id, chat_key, sandbox_key, task, model, trigger, phase, ok, rounds, tool_calls, duration_ms, summary, error, user_id, nickname, ts, artifacts, events, usage)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `INSERT INTO work_runs (id, chat_key, sandbox_key, task, orig_task, model, trigger, phase, ok, rounds, tool_calls, duration_ms, summary, error, user_id, nickname, ts, artifacts, events, usage)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
          ON CONFLICT(id) DO UPDATE SET phase=excluded.phase, ok=excluded.ok, rounds=excluded.rounds,
            tool_calls=excluded.tool_calls, duration_ms=excluded.duration_ms, summary=excluded.summary,
            error=excluded.error, ts=excluded.ts, artifacts=excluded.artifacts,
            events=excluded.events, usage=excluded.usage, nickname=excluded.nickname`,
         // 落库也存全文：工作页/抽屉从库里回放时不能再出现「…(截断,原长 N)」
-        rec.id, rec.chatKey, rec.sandboxKey ?? null, input.task, rec.model, input.trigger, phase,
+        rec.id, rec.chatKey, rec.sandboxKey ?? null, taskText ?? input.task, origTask ?? null, rec.model, input.trigger, phase,
         result?.ok ? 1 : 0, result?.rounds ?? live?.rounds ?? 0, result?.toolCalls ?? live?.toolCalls ?? 0,
         result?.durationMs ?? live?.durationMs ?? 0,
         clip(result?.summary ?? '', 4000), result?.error ?? null, input.userId, input.nickname ?? null, nowMs(),
