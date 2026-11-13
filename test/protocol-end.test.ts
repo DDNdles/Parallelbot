@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -17,16 +17,16 @@ import { qqPathFromUninstallString } from '../src/kernel/services/deps.ts';
 import { MockOneBot } from './helpers/mock-onebot.ts';
 
 /**
- * 协议端二选一（LLBot / NapCat），托管常驻开启；界面上没有端切换入口之外的差异，
- * 换端走设置页那颗胶囊（POST /api/login/protocol）。默认仍是 LLBot / 有头 PMHQ。
+ * 协议端二选一（NapCat / LLBot），托管常驻开启；换端走设置页那颗胶囊（POST /api/login/protocol）。
+ * 默认为 NapCat；保留 LLBot 可切换，切到 LLBot 时回传官方 Auth Token 申请页地址。
  * 预期账号（ui.expectedQq）不是启动前置：登哪个就是哪个；手填才启用账号守卫与快速登录。
  */
 const ANY = (x: unknown) => x as Record<string, unknown>;
 const clients = (cfg: Record<string, unknown>) => ANY(ANY(cfg.network)).websocketClients as Record<string, unknown>[];
 
-test('默认协议端是 LLBot；老配置里的 managed 键与 SnowLuma 残块被迁移清掉', () => {
+test('默认协议端是 NapCat；老配置里的 managed 键与 SnowLuma 残块被迁移清掉', () => {
   const d = freshDefaultConfig();
-  assert.equal(d.onebot.flavor, 'llbot');
+  assert.equal(d.onebot.flavor, 'napcat');
   assert.equal(ANY(d.onebot.llbot).managed, undefined);
   assert.equal(ANY(d.onebot.napcat).managed, undefined);
   assert.equal(ANY(d.onebot.napcat).webuiPort, 6099);
@@ -116,6 +116,7 @@ test('登录判定看协议端自报的在线，不看反向 WS：QQ 退了 WS �
   const dataDir = mkdtempSync(join(tmpdir(), 'parallel-login-gate-'));
   const kernel = new Kernel({ dataDir, noApi: true });
   const onebot = ANY(kernel.config.config.onebot);
+  onebot.flavor = 'llbot';
   onebot.port = 30000 + (process.pid % 20000);
   // 桌面端口也要避开：3080 上常驻着真内核，裸用默认端口这测试谁开机谁炸
   ANY(kernel.config.config.ui).port = 41000 + (process.pid % 8000);
@@ -159,12 +160,21 @@ test('API：换端入口（设置页胶囊）：切换落盘并停旧起新；�
     return { status: r.status, body: ANY(await r.json()) };
   };
   try {
-    assert.equal((await get('/api/login/status')).protocol, 'llbot');
+    assert.equal((await get('/api/login/status')).protocol, 'napcat');
     // 换端入口（设置页胶囊）：停旧端→落盘→（托管内核）起新端；未知档拒绝；noApi 不该触发下载
     assert.equal((await post('/api/login/protocol', { flavor: 'bogus' })).status, 400);
+    const toLlbot = await post('/api/login/protocol', { flavor: 'llbot' });
+    assert.equal(toLlbot.status, 200);
+    assert.equal(toLlbot.body.protocol, 'llbot');
+    assert.equal(toLlbot.body.authUrl, 'https://auth.luckylillia.com', '切到 LLBot 时要返回 token 申请网页地址');
+    assert.equal(ANY(toLlbot.body.auth).pageUrl, 'https://auth.luckylillia.com');
+    assert.equal(kernel.protocolEnd().id, 'llbot');
+    assert.equal(kernel.llbot.running(), false, 'noApi 内核不托管：换端不该触发拉起');
+
     const sw = await post('/api/login/protocol', { flavor: 'napcat' });
     assert.equal(sw.status, 200);
     assert.equal(sw.body.protocol, 'napcat');
+    assert.equal(sw.body.authUrl, undefined);
     assert.equal(kernel.protocolEnd().id, 'napcat');
     assert.equal(kernel.napcat.downloaded(), false, 'noApi 内核不托管：换端不该触发下载');
     assert.equal(ANY(ANY(JSON.parse(readFileSync(join(dataDir, 'config.json'), 'utf-8'))).onebot).flavor, 'napcat', '换端要落盘');
@@ -205,4 +215,21 @@ test('API：换端入口（设置页胶囊）：切换落盘并停旧起新；�
     server.close();
     await kernel.shutdown();
   }
+});
+
+test('NapCat writeNetworkConfig：known uin 时预写 onebot11_<uin>.json 与 onebot11.json', () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'parallel-napcat-net-'));
+  const bus = new Bus();
+  const errors = new ErrorCenter(bus, { dataDir });
+  const config = new ConfigStore(dataDir, bus, errors);
+  config.config.ui.expectedQq = '123456789';
+  const db = new Db(dataDir);
+  const m = new NapCatManager(config, errors, makeLogger, () => ({ connected: false, selfId: '', nickname: '' }));
+  const cfgDir = (m as unknown as { configDir(): string }).configDir();
+  (m as unknown as { writeNetworkConfig(): void }).writeNetworkConfig();
+  assert.equal(existsSync(join(cfgDir, 'onebot11.json')), true);
+  assert.equal(existsSync(join(cfgDir, 'onebot11_123456789.json')), true);
+  const perUin = JSON.parse(readFileSync(join(cfgDir, 'onebot11_123456789.json'), 'utf-8')) as Record<string, unknown>;
+  assert.equal(clients(perUin)[0].name, 'parallel');
+  db.close();
 });

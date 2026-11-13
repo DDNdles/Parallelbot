@@ -182,13 +182,10 @@ export class LLBotManager implements ProtocolEnd {
     out.push(existsSync(exe)
       ? { state: 'pass', label: '发行包', detail: exe }
       : { state: 'warn', label: '发行包', detail: `未下载：${this.homeDir()}` });
-    const uin = String(this.config.config.ui.expectedQq || '');
-    if (this.mode() === 'pmhq') {
-      out.push({ state: uin ? 'pass' : 'fail', label: '账号', detail: uin || '未设置：有头模式拒绝启动，免得顶掉你本机登录的号' });
-    } else {
-      const tok = !!this.config.secrets.llbotAuthToken;
-      out.push({ state: tok ? 'pass' : 'fail', label: 'Auth Token', detail: tok ? 'secrets.json' : '未配置：无头模式无法签名登录' });
-    }
+    const tok = !!(this.config.secrets.llbotAuthToken || '').trim();
+    out.push(tok
+      ? { state: 'pass', label: 'Auth Token', detail: 'secrets.json（已配置）' }
+      : { state: 'fail', label: 'Auth Token', detail: `未配置：请去 ${LLBOT_AUTH_PAGE} 申请` });
     out.push(this.running()
       ? { state: 'pass', label: '进程', detail: `pid=${this.child?.pid}` }
       : { state: 'fail', label: '进程', detail: this.lastError || '未运行' });
@@ -348,11 +345,7 @@ export class LLBotManager implements ProtocolEnd {
   private writeAuthToken(): void {
     const token = (this.config.secrets.llbotAuthToken || '').trim();
     if (!token) {
-      // 警告只在无头直连打：有头（PMHQ）是本机真 QQ 自己签名，没 token 是常态 ——
-      // 这句若在有头模式也打，读日志的人（和人养的 AI）都会误诊成「没 token 起不来」
-      if (this.mode() === 'direct') {
-        this.log.warn('未配置 secrets.llbotAuthToken：无头直连无法签名登录，请在 data/secrets.json 填入（有头模式不需要 token）');
-      }
+      this.log.warn(`未配置 secrets.llbotAuthToken：请先前往 ${LLBOT_AUTH_PAGE} 申请并在设置页或 data/secrets.json 填入`);
       return;
     }
     writeFileSync(join(this.llbotDataDir(), 'auth_token.txt'), token, 'utf-8');

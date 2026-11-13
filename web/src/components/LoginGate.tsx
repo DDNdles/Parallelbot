@@ -2,7 +2,7 @@
 /**
  * 登录门：账号卡（已登录/有历史账号）→ 进入控制台。
  *
- * parallel 只用 QQNT 有头模式，**登录不发生在网页上**：内核把 PMHQ + 本机 QQ 客户端拉起，
+ * parallel 支持 NapCat（默认）与 LLBot（PMHQ）本机 QQNT 注入，**登录不发生在网页上**：内核把协议端与本机 QQ 客户端拉起，
  * 登录在该 QQ 里完成。所以这里没有扫码、没有输密码——QQ 不在线时那颗按钮就是「打开 QQNT」，
  * 点一下让内核把协议端重拉一遍（把 QQ 窗口开起来）；在线后同一个位置变成「进入控制台」。
  *
@@ -198,6 +198,14 @@ export default function LoginGate({ onEnter, onToggleTheme }: {
           <button id="login-qqnt" className="login-btn" disabled={opening} onClick={openQqnt}>
             {opening ? '正在打开…' : '打开 QQNT'}
           </button>
+        )}
+
+        {!online && info?.protocol === 'llbot' && !info?.end?.hasToken && (
+          <div className="login-state err" style={{ marginTop: 8 }}>
+            当前为 LLBot：请先前往{' '}
+            <a href="https://auth.luckylillia.com" target="_blank" rel="noreferrer">auth.luckylillia.com</a>
+            {' '}申请 Auth Token（进入后在设置 → QQ 接入填入）
+          </div>
         )}
 
         <label className="login-auto"><input type="checkbox" id="login-auto-chk" /><span>自动登录，下次直接进入</span></label>

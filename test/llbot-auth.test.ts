@@ -125,6 +125,9 @@ test('API：/api/setup/auth 免 token 可读可写，响应与日志都不带 to
   const server = await startApiServer(kernel);
   const base = `http://127.0.0.1:${kernel.config.config.ui.port}`;
   try {
+    const def = await (await fetch(`${base}/api/setup/auth`)).json() as Record<string, unknown>;
+    assert.equal(def.supported, false, '默认 NapCat 档无需 LLBot Auth Token');
+    ob.flavor = 'llbot';
     const r = await fetch(`${base}/api/setup/auth`);
     assert.equal(r.status, 200, '这页排在拿到 uiToken 之前，必须免鉴权');
     const body = await r.json() as Record<string, unknown>;

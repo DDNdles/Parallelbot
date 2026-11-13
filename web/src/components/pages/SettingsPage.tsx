@@ -62,8 +62,8 @@ interface Work {
 
 interface Config {
   risk: { replyRatePerMin: number; proactive: Record<string, boolean> };
-  /** flavor 不在界面公开（2026-11-04 NapCat 撤离前端）；llbot.mode（接入方式）仍只认手改 config.json */
-  onebot: { host: string; port: number; reverseWsPath: string; flavor?: string };
+  /** 协议端由 POST /api/login/protocol 切换（napcat 默认 / llbot 保留）；llbot.mode 仍只认手改 config.json */
+  onebot: { host: string; port: number; reverseWsPath: string; flavor?: 'napcat' | 'llbot' };
   ui?: { expectedQq?: string; chatPreview?: boolean };
   llm: { failoverThreshold: number };
   /** 每会话历史条数与上下文时间窗在 storage 段；旧内核没这个段，可选 */
@@ -125,6 +125,11 @@ export default function SettingsPage() {
   const [checking, setChecking] = useState(false);
   const [checkedAt, setCheckedAt] = useState(0);
   const [qq, setQq] = useState('');
+  const [protocol, setProtocol] = useState<'napcat' | 'llbot'>('napcat');
+  const [switchingProto, setSwitchingProto] = useState(false);
+  const [llbotAuth, setLlbotAuth] = useState<{ supported?: boolean; hasToken?: boolean; validation?: string; message?: string; loginError?: string; pageUrl?: string; mirrorUrl?: string; qqGroup?: string } | null>(null);
+  const [authInput, setAuthInput] = useState('');
+  const [savingAuth, setSavingAuth] = useState(false);
   const [tavily, setTavily] = useState<string | null>(null);
   const [showKey, setShowKey] = useState(false);
   const [maxRes, setMaxRes] = useState(3);
@@ -179,8 +184,16 @@ export default function SettingsPage() {
   const refreshInfo = useCallback(async () => {
     try {
       const st = await get('/api/login/status') as { protocol?: string; end?: EndStatus };
+      if (st.protocol === 'llbot' || st.protocol === 'napcat') setProtocol(st.protocol);
       if (st.end) setEnd(st.end);
     } catch { setEnd(null); }
+  }, []);
+
+  const loadAuth = useCallback(async () => {
+    try {
+      const a = await get('/api/setup/auth') as { supported?: boolean; hasToken?: boolean; validation?: string; message?: string; loginError?: string; pageUrl?: string; mirrorUrl?: string; qqGroup?: string };
+      setLlbotAuth(a);
+    } catch { /* ignore */ }
   }, []);
 
   /** 可用性检测：内核逐项实测（发行包 / 前提 / 进程 / 控制台 / 反向 WS） */
@@ -197,17 +210,66 @@ export default function SettingsPage() {
     }
   }, []);
 
-  /** 换协议端：内核停旧端→落盘→后台起新端（首次要下发行包），这里只刷新状态。
-   *  2026-11-04 起界面不再提供切换（NapCat 撤离前端）：内核接口保留，只认手改 config/直接调 API。 */
+  /** 换协议端：默认 NapCat，保留 LLBot；切去 LLBot 时同步弹出官方 Auth Token 申请网页 */
+  const switchProtocol = useCallback(async (next: 'napcat' | 'llbot') => {
+    if (next === protocol || switchingProto) return;
+    if (next === 'llbot') {
+      const url = llbotAuth?.pageUrl || 'https://auth.luckylillia.com';
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+    setSwitchingProto(true);
+    try {
+      const r = await post('/api/login/protocol', { flavor: next }) as {
+        ok?: boolean;
+        protocol?: 'napcat' | 'llbot';
+        authUrl?: string;
+        auth?: { hasToken?: boolean; validation?: string; message?: string; loginError?: string; pageUrl?: string; mirrorUrl?: string; qqGroup?: string };
+      };
+      const applied = r.protocol ?? next;
+      setProtocol(applied);
+      setC((prev) => (prev ? { ...prev, onebot: { ...prev.onebot, flavor: applied } } : prev));
+      if (applied === 'llbot' && r.auth) setLlbotAuth({ supported: true, ...r.auth });
+      else void loadAuth();
+      setErr('');
+      await refreshInfo();
+      void runCheck();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setSwitchingProto(false);
+    }
+  }, [protocol, switchingProto, llbotAuth?.pageUrl, loadAuth, refreshInfo, runCheck, setErr, fail]);
+
+  const saveLlbotAuth = useCallback(async () => {
+    if (savingAuth) return;
+    setSavingAuth(true);
+    try {
+      const a = await post('/api/setup/auth', { token: authInput.trim() }) as {
+        supported?: boolean; hasToken?: boolean; validation?: string; message?: string; loginError?: string; pageUrl?: string; mirrorUrl?: string; qqGroup?: string;
+      };
+      setLlbotAuth(a);
+      setAuthInput('');
+      setErr('');
+      await post('/api/login/end/restart').catch(() => {});
+      await refreshInfo();
+      void runCheck();
+    } catch (e) {
+      fail(e);
+    } finally {
+      setSavingAuth(false);
+    }
+  }, [savingAuth, authInput, refreshInfo, runCheck, setErr, fail]);
 
   const loadCfg = useCallback(async () => {
     const cfg: Config = await get('/api/config');
     setC(cfg);
+    if (cfg.onebot?.flavor === 'llbot' || cfg.onebot?.flavor === 'napcat') setProtocol(cfg.onebot.flavor);
     setQq(cfg.ui?.expectedQq ?? '');
-    refreshInfo();
+    void refreshInfo();
+    void loadAuth();
     loadPlug();
     void runCheck();
-  }, [refreshInfo, loadPlug, runCheck]);
+  }, [refreshInfo, loadAuth, loadPlug, runCheck]);
   useEffect(() => { void loadCfg().catch(() => {}); }, [loadCfg]);
 
   /** 停留在 QQ 接入分节时自动体检（15s 一拍，本地探针很轻）；手动检测在跑就让路，节拍顺延 */
@@ -318,8 +380,69 @@ export default function SettingsPage() {
               <div className="mset-sec-h"><span>协议端</span></div>
 
               <div className="mset-models">
+                <div className="mset-mrow">
+                  <span className="plg-k">引擎</span>
+                  <span className="mset-macts">
+                    <PillSelect
+                      label="协议端"
+                      value={protocol}
+                      options={[
+                        { v: 'napcat', t: 'NapCat（默认）' },
+                        { v: 'llbot', t: 'LuckyLillia (LLBot)' },
+                      ]}
+                      onChange={(v) => void switchProtocol(v === 'llbot' ? 'llbot' : 'napcat')}
+                    />
+                  </span>
+                </div>
                 <div className="mset-mrow"><span className="plg-k">端点</span><span className="plg-v mono">ws://{c.onebot.host}:{c.onebot.port}{c.onebot.reverseWsPath}</span></div>
               </div>
+
+              {protocol === 'llbot' && (
+                <>
+                  <div className="mset-sec-h">
+                    <span>LLBot Auth Token</span>
+                    <span className="plg-sec-r">
+                      <button className="btn" onClick={() => window.open(llbotAuth?.pageUrl || 'https://auth.luckylillia.com', '_blank', 'noopener,noreferrer')}>
+                        去申请 Token
+                      </button>
+                    </span>
+                  </div>
+                  <div className="mset-models">
+                    <div className="mset-mrow">
+                      <span className="plg-k">状态</span>
+                      <span className="plg-v mono">
+                        {llbotAuth?.hasToken ? '已配置' : '未配置（需先向 LLBot 申请 Auth Token）'}
+                        {llbotAuth?.validation ? ` · ${llbotAuth.validation}` : ''}
+                        {llbotAuth?.message ? ` · ${llbotAuth.message}` : ''}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="mset-field">
+                    <label className="mset-flabel">填入或更换 Auth Token</label>
+                    <div className="set-row" style={{ gap: 8 }}>
+                      <BrandInput
+                        type="password"
+                        autoComplete="new-password"
+                        className="mono"
+                        style={{ flex: 1 }}
+                        placeholder="粘贴从 auth.luckylillia.com 申请的 token；留空保存可清除"
+                        value={authInput}
+                        spellCheck={false}
+                        onChange={(e) => setAuthInput(e.target.value)}
+                      />
+                      <button className="btn" disabled={savingAuth} onClick={() => void saveLlbotAuth()}>
+                        {savingAuth ? '保存中…' : '保存并应用'}
+                      </button>
+                    </div>
+                    <div className="plg-hint" style={{ marginTop: 6 }}>
+                      申请页：<a href={llbotAuth?.pageUrl || 'https://auth.luckylillia.com'} target="_blank" rel="noreferrer">{llbotAuth?.pageUrl || 'https://auth.luckylillia.com'}</a>
+                      {llbotAuth?.mirrorUrl && (
+                        <> · 国内镜像：<a href={llbotAuth.mirrorUrl} target="_blank" rel="noreferrer">{llbotAuth.mirrorUrl}</a></>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
 
               <div className="mset-sec-h">
                 <span>可用性</span>

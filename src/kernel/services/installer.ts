@@ -243,7 +243,10 @@ async function installEnd(ctx: InstallerCtx, step: InstallStep, clock: { now: ()
   step.state = 'waiting';
   step.detail = '正在解包…';
   const it = await waitProbe(ctx, 'llbot', 90_000, clock.sleep);
-  settle(step, it, '发行包解包后仍找不到 llbot.exe');
+  const missMsg = ctx.probeCtx().endFlavor === 'napcat'
+    ? '发行包解包后仍找不到 NapCat 引导程序'
+    : '发行包解包后仍找不到 llbot.exe';
+  settle(step, it, missMsg);
 }
 
 /** Python / Git / QQ：winget 静默装，装完轮询探测（新 PATH 可能要等安装器落盘） */

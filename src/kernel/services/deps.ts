@@ -205,9 +205,10 @@ async function probeOne(id: string, ctx: DepProbe): Promise<DepItem> {
     }
     case 'qq': {
       const path = await findQqInstallPath(ctx.qqPathCfg);
+      const cfgKey = ctx.endFlavor === 'napcat' ? 'onebot.napcat.qqPath' : 'onebot.llbot.qqPath';
       return {
         id, label: 'QQNT 客户端', required: ctx.headed, state: path ? 'ok' : 'missing',
-        detail: path || '没探到 QQ.exe：装好后重启内核，或在 data/config.json 写 onebot.llbot.qqPath',
+        detail: path || `没探到 QQ.exe：装好后重启内核，或在 data/config.json 写 ${cfgKey}`,
         download: 'https://im.qq.com/pcqq/',
       };
     }

@@ -57,12 +57,11 @@ export const DEFAULT_CONFIG = {
     port: 3001,                           // 反向 WS 服务端口
     host: '127.0.0.1',
     /** 协议端（两者都只说 OneBot 11 反向 WS，接入侧无差别；差别在内核托管哪一个）。
-     *  托管常驻开启：桌面内核启动即自动下载/拉起/守护，界面上不再有开关。默认 LLBot（有头 PMHQ）。 */
-    flavor: 'llbot' as 'llbot' | 'napcat',
+     *  托管常驻开启：桌面内核启动即自动下载/拉起/守护。默认 NapCat；保留 LLBot 可随时在设置页切换（需 Auth Token）。 */
+    flavor: 'napcat' as 'llbot' | 'napcat',
     llbot: {
-      // 接入方式：'pmhq' = 有头模式（PMHQ 注入本机 QQNT；官方文档明示「无头模式有掉线风险」，PMHQ 是稳的那条路）
-      //           'direct' = 无头模式（纯协议直连 + 签名服务 Auth Token）——**2026-10-11 起放弃**：
-      //           token 要向作者申请（见 services/llbot.ts 的 authState），且有头本来就更稳，界面上没有切过去的入口
+      // 接入方式：'pmhq' = 有头模式（PMHQ 注入本机 QQNT）；'direct' = 无头模式（纯协议直连）。
+      //           新版 LLBot/PMHQ 均需申请 Auth Token（见 https://auth.luckylillia.com 及 services/llbot.ts）
       mode: 'pmhq' as 'pmhq' | 'direct',
       webuiPort: 15173,                   // LLBot WebUI 端口（CLI 包内置默认；实际以 stdout 解析为准，登录二维码经内核代理）
       qqPath: '',                         // 本机 QQ.exe 路径（有头模式用；空 = 自动探测）

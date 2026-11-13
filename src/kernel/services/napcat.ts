@@ -204,8 +204,16 @@ export class NapCatManager implements ProtocolEnd {
       return;
     }
     this.stopping = false;
+    this.lastError = '';
     mkdirSync(this.configDir(), { recursive: true });
-    if (!this.downloaded()) await this.downloadAndExtract();
+    if (!this.downloaded()) {
+      try {
+        await this.downloadAndExtract();
+      } catch (e) {
+        this.lastError = (e as Error).message;
+        throw e;
+      }
+    }
     if (!this.downloaded()) {
       this.lastError = `NapCat 未就绪：解压后找不到 NapCatWinBootMain.exe 或 napcat.mjs（${this.shellDir()}）`;
       this.errors.record('error', 'adapter', this.lastError, { notifyOwner: true });
@@ -269,16 +277,27 @@ export class NapCatManager implements ProtocolEnd {
     await new Promise<void>((resolveP) => {
       const t = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* ignore */ } resolveP(); }, 5000);
       c.once('exit', () => { clearTimeout(t); resolveP(); });
-      try { c.kill(); } catch { /* ignore */ }
+      try {
+        // Windows 下 NapCatWinBootMain 会拉起注入后的 QQ.exe 子树，只杀启动器会留下孤儿 QQ 进程影响重连或切换 LLBot
+        if (process.platform === 'win32' && c.pid) {
+          execFile('taskkill', ['/PID', String(c.pid), '/T', '/F'], () => { /* 进程已退时 taskkill 报错，忽略 */ });
+        } else {
+          c.kill();
+        }
+      } catch { clearTimeout(t); resolveP(); }
     });
   }
 
   private writeNetworkConfig(): void {
+    const dir = this.configDir();
+    mkdirSync(dir, { recursive: true });
     const url = `ws://${this.config.config.onebot.host}:${this.config.config.onebot.port}${this.config.config.onebot.reverseWsPath}`;
     const client = napcatWsClient(url, this.config.secrets.onebotAccessToken || '');
-    const names = ['onebot11.json', ...readdirSync(this.configDir()).filter((n) => /^onebot11_.+\.json$/.test(n))];
-    for (const name of names) {
-      const p = join(this.configDir(), name);
+    const uin = String(this.config.config.ui.expectedQq || this.config.config.ui.lastLogin?.qq || '').trim();
+    const targets = new Set(['onebot11.json', ...readdirSync(dir).filter((n) => /^onebot11_.+\.json$/.test(n))]);
+    if (/^\d+$/.test(uin)) targets.add(`onebot11_${uin}.json`);
+    for (const name of targets) {
+      const p = join(dir, name);
       let cur: unknown = {};
       try { cur = JSON.parse(readFileSync(p, 'utf-8')); } catch { cur = {}; }
       writeFileSync(p, JSON.stringify(mergeNapcatNetworkConfig(cur, client), null, 2));

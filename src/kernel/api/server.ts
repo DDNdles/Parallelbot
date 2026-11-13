@@ -252,7 +252,7 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
           lastLogin: kernel.config.config.ui.lastLogin,
           expectedQq: st.expectedQq || '',
           accountBlocked: st.accountBlocked,
-          protocol: kernel.config.config.onebot.flavor ?? 'llbot',
+          protocol: kernel.config.config.onebot.flavor ?? 'napcat',
           end,
         });
       }
@@ -290,7 +290,10 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
             });
           }
         }
-        return send({ ok: true, protocol: kernel.config.config.onebot.flavor });
+        const extra = f === 'llbot'
+          ? { authUrl: kernel.llbot.authPage().pageUrl, auth: await kernel.llbot.authState() }
+          : {};
+        return send({ ok: true, protocol: kernel.config.config.onebot.flavor, ...extra });
       }
       if (b === 'end' && c === 'restart' && req.method === 'POST') {
         const end = kernel.protocolEnd();
