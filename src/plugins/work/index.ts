@@ -363,6 +363,47 @@ export function setup(ctx: PluginContext): void {
     },
   });
   ctx.llm.registerTool({
+    name: 'work_cancel',
+    description: '终止发起人**自己**正在跑的 work 任务（或取消自己等待回答的提问态）。只能终止调用者本人发起的任务，绝不会也无法查看或终止其他用户的任务。用户说「别做了/停下/取消任务/算了不弄了」时调用。',
+    surface: 'chat',
+    promptSnippet: '终止发起人自己正在跑的工作任务（仅限本人，不能终止别人的）',
+    promptGuidelines: [
+      '用户明确要求停掉、取消、中止自己派出去的活时调用；只能停调用者本人的任务，绝不要试图取消别人的任务。',
+      '通常不传参数直接调用即可；只有对方同时有多个进行中任务且指定了要停哪一个时才传 target 或 all: true。',
+      '若工具返回有多项任务需要确认，先问清对方要停哪一件或是否全部停掉；若提示没有在跑的活，如实说明即可，不要提任务编号、工具名、系统这些词。',
+    ],
+    parameters: {
+      type: 'object',
+      properties: {
+        run_id: { type: 'string', description: '可选：已知具体任务号且需精确取消某一项时传入（必须属于本人）' },
+        target: { type: 'string', description: '可选：本人同时有多个任务时，用任务标题关键词匹配要取消的那一项' },
+        all: { type: 'boolean', description: '可选：本人同时有多个任务且用户明确要求全部取消时传 true' },
+      },
+    },
+    handler: (args, tctx) => {
+      if (!canWork(String(tctx.role))) {
+        return '（权限不足：只有管理员和主人能终止工作任务。用你自己的语气婉拒对方，别提到权限系统或工具。）';
+      }
+      const res = ctx.work.cancel(tctx.event.userId, {
+        runId: typeof args.run_id === 'string' ? args.run_id : undefined,
+        target: typeof args.target === 'string' ? args.target : undefined,
+        all: args.all === true,
+      });
+      if (!res.ok) {
+        if (res.reason === 'ambiguous' && res.candidates?.length) {
+          const list = res.candidates.map((c) => `「${c.task}」`).join('、');
+          return `你名下现在同时有 ${res.candidates.length} 件正在跑的任务：${list}。目前尚未终止任何任务，用你自己的语气问清对方要停哪一件，或确认是否全部停掉（不要提任务编号、工具名、系统这些词）。`;
+        }
+        return '你名下当前没有正在运行或等待回答的工作任务（注意：本工具只能操作发起人自己的任务，不会也不允许终止其他用户的任务）。用你自己的语气告诉对方目前没有他名下可终止的任务，不要提任务编号、工具名、系统这些词。';
+      }
+      if (res.cancelled.length > 0) {
+        const names = res.cancelled.map((c) => `「${c.task}」`).join('、');
+        return `已终止你名下正在运行的任务：${names}。用你自己的语气告诉对方已经停掉了，不要提任务编号、工具名、系统这些词，也不要假装任务完成了。`;
+      }
+      return `已取消你名下等待回答的任务「${res.clearedPending ?? ''}」。用你自己的语气告诉对方已取消，不要提任务编号、工具名、系统这些词。`;
+    },
+  });
+  ctx.llm.registerTool({
     name: 'deliver_file',
     description: '把工作子代理做好、登记在交付清单里的文件发给用户。用户说「发给我/发来看看/文件呢」时用它；只能发本会话沙箱里已登记的交付物。',
     minRole: 'admin',
@@ -471,6 +512,7 @@ export function setup(ctx: PluginContext): void {
         trigger: 'subagent' as const,
         depth: (tctx.work?.depth ?? 0) + 1,
         parentId: tctx.work?.runId,
+        abort: tctx.signal,
       };
       const render = (label: string, r: any): string => {
         if (!r) return `${label}：子代理没有返回结果`;

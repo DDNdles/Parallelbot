@@ -1150,6 +1150,12 @@ function makeGatedWork(
       return { ok: true, label };
     },
 
+    /** 终止**这位发起人自己**正在跑的任务（绝不影响其他用户的任务） */
+    cancel: (userId: string, opts?: { runId?: string; target?: string; all?: boolean }) => {
+      can();
+      return deps.work.cancel(userId, opts);
+    },
+
     /** 该会话里这位发起人自己的进度（别人的活不返回） */
     status: (userId: string) => deps.work.liveStatus(userId),
 

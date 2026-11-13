@@ -296,9 +296,12 @@ export class AgentLoop {
     const off = agent.subscribe((ev: any) => this.onAgentEvent(ev, ctx, cap, { chatKey, step, event, agent }));
 
     try {
-      // 历史最后一条就是本轮用户发言：用 continue 从当前 transcript 接着跑
-      await agent.continue();
-      await agent.waitForIdle();
+      // 若入口调用前已被终止（例如 work_cancel 在排队期间触发），直接跳过模型请求
+      if (!opts.abort?.aborted) {
+        // 历史最后一条就是本轮用户发言：用 continue 从当前 transcript 接着跑
+        await agent.continue();
+        await agent.waitForIdle();
+      }
 
       // 模型瞬态中断重试（2026-10-25）：Gemini 生成工具调用参数时偶发
       // MALFORMED_FUNCTION_CALL，pi 把它转成 stopReason='error' 的空 assistant 收场——
@@ -414,7 +417,7 @@ export class AgentLoop {
       description: def.description,
       // pi-ai 的工具参数是 TypeBox schema；parallel 存的就是 JSON Schema，原样包一层即可
       parameters: pie.Type.Unsafe(def.parameters),
-      execute: async (_toolCallId: string, params: Record<string, unknown>) => {
+      execute: async (_toolCallId: string, params: Record<string, unknown>, signal?: AbortSignal) => {
           const tctx: ToolContext = {
             event: ctx.event, chat: ctx.chat, role: ctx.event.role ?? 'member',
             batch: ctx.batch, speakers: ctx.speakers,
@@ -422,6 +425,7 @@ export class AgentLoop {
             work: ctx.workTurn ? { depth: ctx.workDepth ?? 0, runId: ctx.workRunId, agent: ctx.workAgent?.name } : undefined,
             vision,
             attachments: ctx.attachments,
+            signal,
             // 窗口消息快照（user/assistant）：work_dispatch 纯转发的引用源（只能逐字引用，程序转发整条原文）
             // 只读投影——工具拿不到也改不了这份上下文本身
             contextMessages: ctx.messages

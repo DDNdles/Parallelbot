@@ -137,7 +137,7 @@ export class MockEngine {
   }
 
   /** pi-ai 的 StreamFn：与真实引擎同形 */
-  streamFn = (model: Model<any>, context: TranscriptContext, _options?: SimpleStreamOptions) => {
+  streamFn = (model: Model<any>, context: TranscriptContext, options?: SimpleStreamOptions) => {
     const stream = createAssistantMessageEventStream();
     const tools = availableToolNames(context);
     const sysText = systemTextOf(context);
@@ -243,10 +243,33 @@ export class MockEngine {
       } as AssistantMessageEvent);
       stream.end(message);
     };
-    // 时序用例可以要求"想一会儿再答"：延迟期内事件流空转，内核那一轮还在跑
+    // 时序用例可以要求"想一会儿再答"：延迟期内事件流空转，内核那一轮还在跑；若期间被 abort 则立刻清理定时器并收尾
     const wait = Math.max(0, Math.round(step?.delayMs ?? 0));
-    if (wait > 0) setTimeout(emit, wait);
-    else emit();
+    const emitAborted = () => {
+      const errMsg = { ...assistantMessage({ model, content: [], stopReason: 'aborted' }), errorMessage: 'Request was aborted' };
+      stream.push({ type: 'error', reason: 'aborted', error: errMsg } as AssistantMessageEvent);
+      stream.end(errMsg);
+    };
+    if (options?.signal?.aborted) {
+      emitAborted();
+    } else if (wait > 0) {
+      const sig = options?.signal;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const onAbort = () => {
+        if (timer) { clearTimeout(timer); timer = undefined; }
+        sig?.removeEventListener('abort', onAbort);
+        emitAborted();
+      };
+      sig?.addEventListener('abort', onAbort, { once: true });
+      timer = setTimeout(() => {
+        timer = undefined;
+        sig?.removeEventListener('abort', onAbort);
+        if (sig?.aborted) emitAborted();
+        else emit();
+      }, wait);
+    } else {
+      emit();
+    }
     return stream;
   };
 }

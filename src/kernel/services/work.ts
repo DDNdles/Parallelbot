@@ -7,7 +7,7 @@ import { WORK_IDLE_REMIND_LIMIT } from '../agentloop.ts';
 import type { LlmService, UsageSnapshot } from './llm.ts';
 import { usageDelta } from './llm.ts';
 import type { SandboxService } from './sandbox.ts';
-import type { ToolDef, ChatMessage, ChatRef, LLMRequestContext, MessageAttachment, WorkAgentDef, WorkLiveStatus } from '../types.ts';
+import type { ToolDef, ChatMessage, ChatRef, LLMRequestContext, MessageAttachment, WorkAgentDef, WorkCancelResult, WorkLiveStatus } from '../types.ts';
 import { newId, nowMs, clip } from '../util/misc.ts';
 import { busEvents } from '../bus.ts';
 import { buildWorkSections, composeContinueTask, composeTaskResume, parseWorkHandoff, type PendingAsk } from '../work-prompt.ts';
@@ -115,6 +115,8 @@ export interface WorkRunResult {
    * 与 ok 不冲突：ok=false 指跑挂了，awaiting 指跑通了但要人来拍板。
    */
   awaiting?: { question: string; notes?: string };
+  /** 是否被发起人主动终止（work_cancel）或上游 AbortSignal 取消 */
+  cancelled?: boolean;
   error?: string;
   model: string;
   /** 本次任务的 token 账（work 侧栏显示缓存命中） */
@@ -295,15 +297,95 @@ export class WorkRunner {
 
   /** 正在跑的入口任务 → 插话句柄（agents.steer 排进 pi 的 steeringQueue） */
   private steerers = new Map<string, { steer: (text: string) => boolean; record: (text: string) => void }>();
+  /** 每次 run 自己的 AbortController（无论上游是否传 input.abort，都可被 work_cancel 按 runId 精确终止） */
+  private aborts = new Map<string, { ac: AbortController; reason?: 'user' | 'parent' }>();
+
+  /** 沿 parentId 向下级联 abort 某个入口任务及其仍在运行的所有子代理 */
+  private abortRunTree(rootId: string, reason: 'user' | 'parent'): void {
+    const ids = new Set<string>([rootId]);
+    // Runs 按 depth 嵌套可能多层（delegate -> delegate），迭代扫出所有后代
+    let added = true;
+    while (added) {
+      added = false;
+      for (const r of this.runs.values()) {
+        if (r.phase === 'running' && r.parentId && ids.has(r.parentId) && !ids.has(r.id)) {
+          ids.add(r.id);
+          added = true;
+        }
+      }
+    }
+    for (const rid of ids) {
+      const entry = this.aborts.get(rid);
+      if (!entry) continue;
+      if (!entry.reason) entry.reason = reason;
+      if (!entry.ac.signal.aborted) entry.ac.abort();
+    }
+  }
+
+  /**
+   * 终止**发起人自己**正在跑的 work 任务。
+   * 严格按 `r.userId === userId` 过滤顶层任务（`depth === 0`），绝不触碰任何其他用户的任务；
+   * 若传入了其他用户的 `runId`，只返回 `{ ok: false, reason: 'none' }`。
+   */
+  cancel(userId: string, opts?: { runId?: string; target?: string; all?: boolean }): WorkCancelResult {
+    const running = [...this.runs.values()].filter(
+      (r) => r.userId === userId && (r.depth ?? 0) === 0 && r.phase === 'running' && !this.aborts.get(r.id)?.ac.signal.aborted,
+    );
+    const reqId = opts?.runId?.trim();
+    const q = opts?.target?.trim().toLowerCase();
+
+    if (reqId) {
+      const hit = running.find((r) => r.id === reqId);
+      if (hit) {
+        this.abortRunTree(hit.id, 'user');
+        return { ok: true, cancelled: [{ id: hit.id, task: clip(hit.task, 80) }] };
+      }
+      const p = this.livePending(userId);
+      if (p && p.runId === reqId) {
+        this.pending.delete(this.pendingKey(userId));
+        return { ok: true, cancelled: [], clearedPending: p.label };
+      }
+      return { ok: false, reason: 'none' };
+    }
+
+    if (!running.length) {
+      const p = this.livePending(userId);
+      if (p && (!q || p.label.toLowerCase().includes(q) || (p.origTask ?? '').toLowerCase().includes(q))) {
+        this.pending.delete(this.pendingKey(userId));
+        return { ok: true, cancelled: [], clearedPending: p.label };
+      }
+      return { ok: false, reason: 'none' };
+    }
+
+    let matched = running;
+    if (q) {
+      matched = running.filter((r) => r.task.toLowerCase().includes(q) || r.id.toLowerCase() === q);
+      if (!matched.length) return { ok: false, reason: 'none' };
+    }
+
+    if (matched.length > 1 && !opts?.all) {
+      return {
+        ok: false,
+        reason: 'ambiguous',
+        candidates: matched.map((r) => ({ id: r.id, task: clip(r.task, 80) })),
+      };
+    }
+
+    for (const r of matched) {
+      this.abortRunTree(r.id, 'user');
+    }
+    return { ok: true, cancelled: matched.map((r) => ({ id: r.id, task: clip(r.task, 80) })) };
+  }
 
   /** 向正在跑的任务插话（用户改需求）。没有在跑的活返回 false，调用方走正常派活。 */
   steer(chat: ChatRef, userId: string, text: string): boolean {
     const hot = this.steerers.get(`${chat.type}_${chat.chatId}|${userId}`);
     if (!hot) return false;
-    // 刚好收尾的活不能接：收尾时队列会被 clearAllQueues 清掉，说"已插话"就是骗人
+    // 刚好收尾或已被终止的活不能接：收尾时队列会被 clearAllQueues 清掉，说"已插话"就是骗人
     const key = `${chat.type}_${chat.chatId}`;
     const active = [...this.runs.values()].some(
-      (r) => r.chatKey === key && r.userId === userId && (r.depth ?? 0) === 0 && r.phase === 'running',
+      (r) => r.chatKey === key && r.userId === userId && (r.depth ?? 0) === 0 && r.phase === 'running'
+        && !this.aborts.get(r.id)?.ac.signal.aborted,
     );
     if (!active) return false;
     const body = String(text ?? '').trim();
@@ -325,6 +407,16 @@ export class WorkRunner {
     // 子代理（depth>0）不接插话：它们是任务的内部实现，用户的话应该落到入口任务上。
     const steerKey = `${input.chat.type}_${input.chat.chatId}|${input.userId}`;
     let steerEntry: { steer: (text: string) => boolean; record: (text: string) => void } | undefined;
+    const abortEntry: { ac: AbortController; reason?: 'user' | 'parent' } = { ac: new AbortController() };
+    this.aborts.set(id, abortEntry);
+    const onParentAbort = () => {
+      if (!abortEntry.reason) abortEntry.reason = 'parent';
+      if (!abortEntry.ac.signal.aborted) abortEntry.ac.abort();
+    };
+    if (input.abort) {
+      if (input.abort.aborted) onParentAbort();
+      else input.abort.addEventListener('abort', onParentAbort, { once: true });
+    }
     try {
     const chatKey = `${input.chat.type}_${input.chat.chatId}`;
     const cont = input.continuation;
@@ -472,7 +564,7 @@ export class WorkRunner {
 
       const { reply, rounds, toolCalls, steps, finished, error: loopError, messages: transcript } = await this.agentLoop.run(ctx, {
         chatKey,
-        abort: input.abort,
+        abort: abortEntry.ac.signal,
         // 轮次：work 轮不设上限（2026-10-23 用户定）；agent 定义里的 max_rounds 不再参与截断
         // 模型链：由 agent 定义决定（缺省 work；子代理可声明 chain: chat）
         chain: agent.chain ?? 'work',
@@ -522,13 +614,33 @@ export class WorkRunner {
       const artifacts = handoff.structured && handoff.artifacts.length
         ? dedupe([...handoff.artifacts, ...metaArtifacts, ...scanned])
         : dedupe([...metaArtifacts, ...extractArtifacts(steps, sandboxRoot), ...scanned]);
+      // 被终止 / 取消：优先于正常完成与未调用 work_finish 的判定。
+      // 否则若前几轮已有文本输出，agentloop 会把 finished 标为 true，错把已终止的任务判成 ok: true！
+      if (abortEntry.ac.signal.aborted) {
+        const err = abortEntry.reason === 'user' ? '任务已被发起人终止' : '任务已取消';
+        const result: WorkRunResult = {
+          id, ok: false, cancelled: true, sandboxKey, summary: clip(reply, 300), rounds, toolCalls,
+          durationMs: nowMs() - startedAt, artifacts, error: err, model,
+          usage: usageDelta(usageBefore, this.llm.usageSnapshot(input.chat.chatId)),
+        };
+        const r = this.runs.get(id);
+        if (r) Object.assign(r, result, { steps, phase: 'error' as const, finishedAt: nowMs() });
+        this.errors.record('warn', 'sandbox', `work 任务取消: ${err}`, { chatId: input.chat.chatId });
+        this.bus.emit(busEvents.workError, {
+          id, chatKey, error: err, model, trigger: input.trigger, chat: reportChat,
+          userId: input.userId, nickname: input.nickname, role: input.role, task: taskLabel, result,
+        });
+        this.persist('error', rec, input, result, task);
+        this.pruneFinishedRuns();
+        return result;
+      }
       // 停下来提问：结论就是那个问题（交付文本里的「## 待确认/## 已做到」只是留给人读的）
       const ask = metaAsk as { question: string; notes?: string } | undefined;
       // 两种"不是成功"的结局（2026-10-25 用户定：强制 work_finish 才算完成）：
       //  1. 模型链一整轮什么都没吐（没接模型/额度耗尽/链全挂被吞成空流）；
       //  2. 提醒满限仍只发文字、没调 work_finish / work_ask——按未完成处理，
       //     不能给 ok:true 让转述轮把一句旁白当"做完了"讲出去。轮次与工具账都保留。
-      const unfinished = !finished && !ask && !input.abort?.aborted && reply.trim().length > 0;
+      const unfinished = !finished && !ask && !abortEntry.ac.signal.aborted && reply.trim().length > 0;
       if (!ask && (!reply.trim() || unfinished)) {
         const err = !reply.trim()
           // 重试两次都没救回来的报错原样带回（「400 图片保存失败…」「fetch failed」）——
@@ -580,19 +692,22 @@ export class WorkRunner {
       this.pruneFinishedRuns();
       return result;
     } catch (e) {
-      const err = (e as Error).message;
+      const wasAborted = abortEntry.ac.signal.aborted;
+      const err = wasAborted
+        ? (abortEntry.reason === 'user' ? '任务已被发起人终止' : '任务已取消')
+        : (e as Error).message;
       const r = this.runs.get(id);
       // 跑挂了也要把已经写出来的文件带出去：失败报告至少能附上部分产物，
       // 不能因为最后一步模型链断了就把整场工作的文件全丢在沙箱里。
       const scanned = collectRecentArtifacts(this.sandbox.root(chat), startedAt);
       const artifacts = dedupe([...metaArtifacts, ...extractArtifacts(r?.steps ?? rec.steps, this.sandbox.root(chat)), ...scanned]);
       const result: WorkRunResult = {
-        id, ok: false, sandboxKey, summary: '', rounds: r?.rounds ?? 0, toolCalls: r?.toolCalls ?? 0,
+        id, ok: false, ...(wasAborted ? { cancelled: true } : {}), sandboxKey, summary: '', rounds: r?.rounds ?? 0, toolCalls: r?.toolCalls ?? 0,
         durationMs: nowMs() - startedAt, artifacts, error: err, model,
         usage: usageDelta(usageBefore, this.llm.usageSnapshot(input.chat.chatId)),
       };
       if (r) Object.assign(r, result, { phase: 'error' as const, finishedAt: nowMs() });
-      this.errors.record('warn', 'sandbox', `work 任务失败: ${err}`, { chatId: input.chat.chatId });
+      this.errors.record('warn', 'sandbox', wasAborted ? `work 任务取消: ${err}` : `work 任务失败: ${err}`, { chatId: input.chat.chatId });
       this.bus.emit(busEvents.workError, {
         id, chatKey, error: err, model, trigger: input.trigger, chat: reportChat,
         userId: input.userId, nickname: input.nickname, role: input.role, task: taskLabel, result,
@@ -602,6 +717,8 @@ export class WorkRunner {
       return result;
     }
     } finally {
+      if (input.abort) input.abort.removeEventListener('abort', onParentAbort);
+      if (this.aborts.get(id) === abortEntry) this.aborts.delete(id);
       if (steerEntry && this.steerers.get(steerKey) === steerEntry) this.steerers.delete(steerKey);
       if (chainKind === 'work') this.releaseWorkSlot(slot);
     }

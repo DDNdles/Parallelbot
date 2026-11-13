@@ -493,6 +493,7 @@ export class LlmService {
       const out = pie.createAssistantMessageEventStream();
       void (async () => {
         const fail = (err: Error) => { out.push(errorEvent(err)); out.end(); };
+        if (options?.signal?.aborted) { fail(new Error('Request was aborted')); return; }
         const list = self.chainConfig(kind);
         if (!list.length) { fail(new ProviderError('模型链是空的：请在桌面端「模型」页的「聊天模型」里加至少一条')); return; }
         // 并发的 work 任务钉在自己的起始模型上；单个任务仍从它起绕完整条链做替代

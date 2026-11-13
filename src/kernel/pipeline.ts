@@ -721,7 +721,8 @@ export class Pipeline {
     if (!payload || payload.trigger !== 'chat') return;
     const chat = payload.chat;
     const result = payload.result;
-    if (!chat || !result || !payload.userId) return;
+    // 用户主动通过 work_cancel 终止任务时，chat 当轮已当场答复，不再补发失败汇报
+    if (!chat || !result || !payload.userId || result.cancelled) return;
     const chatKey = `${chat.type}_${chat.chatId}`;
     const prev = this.reportChains.get(chatKey) ?? Promise.resolve();
     const next = prev

@@ -166,6 +166,8 @@ export interface ToolContext {
   vision?: boolean;
   /** 本轮真人输入带的附件（图片/语音/视频）：work_dispatch 用它把用户这轮发的图直接交给 work */
   attachments?: MessageAttachment[];
+  /** 工具执行取消信号（来自底层 agent-loop 的 AbortController） */
+  signal?: AbortSignal;
 }
 
 /**
@@ -821,6 +823,20 @@ export interface WorkLiveStatus {
   recent?: { id: string; task: string; ok: boolean; phase: string; at: number; runId?: string }[];
 }
 
+export type WorkCancelResult =
+  | {
+      ok: true;
+      cancelled: { id: string; task: string }[];
+      /** 若没有正在跑的入口任务，但清掉了该用户遗留的 work_ask 等待态，记录被清理的任务描述 */
+      clearedPending?: string;
+    }
+  | {
+      ok: false;
+      reason: 'none' | 'ambiguous';
+      /** reason === 'ambiguous' 时列出该用户当前可匹配的运行中任务 */
+      candidates?: { id: string; task: string }[];
+    };
+
 export interface GatedWork {
   /** work 模型标识（如 'deepseek:deepseek-reasoner'），桌面端展示 chat/work 双模型 */
   modelLabel(): string;
@@ -838,6 +854,11 @@ export interface GatedWork {
    * 在当前轮结束后作为 user 消息注入。没有在跑的活返回 false（调用方走正常派活）。
    */
   steer(chat: ChatRef, userId: string, text: string): boolean;
+  /**
+   * 终止**发起人自己**正在跑的 work 任务（仅匹配该 userId 发起的顶层任务并级联终止其子代理；
+   * 若没有正在跑的任务但有遗留的 work_ask 等待态，则清理该等待态）。绝不会影响其他用户的任务。
+   */
+  cancel(userId: string, opts?: { runId?: string; target?: string; all?: boolean }): WorkCancelResult;
   /** 这位发起人自己的活（按 userId 跨会话过滤；2026-10-25 任务隔离改版后群聊不再是一层边界） */
   status(userId: string): WorkLiveStatus;
   /** 最近任务（桌面端「工作」页） */

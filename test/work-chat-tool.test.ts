@@ -594,3 +594,145 @@ test('work_dispatch：引用早前几条消息时按时间顺序转发整条原�
     await g.cleanup();
   }
 });
+
+test('work_cancel：普通群友权限不足；另一个用户（含管理员）绝不能终止他人的 work，且本人可正常终止', async () => {
+  const g = await boot('9411');
+  g.mock.script.length = 0;
+  try {
+    const memberCancel = g.tools('member').find((t) => t.name === 'work_cancel');
+    assert.ok(memberCancel, '普通群友的 chat 面也要看得到 work_cancel（便于人格化婉拒）');
+
+    const chat = g.chat;
+    const agent = g.kernel.container.workAgent();
+    const tools = g.kernel.container.workToolsFor(chat, 'owner', agent, 0);
+
+    // 主人 A（10001）开一个长任务：第 1 轮已有输出，第 2 轮还在延迟等待中
+    g.mock.script.push({ content: '我先列出目录', toolCalls: [{ name: 'sandbox_list', args: {} }] });
+    g.mock.script.push({ content: '还在慢跑', delayMs: 2500, toolCalls: [{ name: 'work_finish', args: { summary: 'A 不该完成' } }] });
+
+    const errorEvents: any[] = [];
+    const offErr = g.kernel.bus.on(busEvents.workError, (d: any) => errorEvents.push(d));
+
+    const runA = g.kernel.workRunner.run({
+      chat, task: 'A 的长时间任务', taskLabel: 'A 的长时间任务', userId: '10001', nickname: '主人A',
+      role: 'owner', agent, tools, trigger: 'chat', depth: 0,
+    });
+    await until(() => g.kernel.workRunner.liveStatus('10001').active.length === 1, 8000, 'A 任务开跑');
+    const aRunId = g.kernel.workRunner.liveStatus('10001').active[0].id;
+    // 等到进入第 2 轮延迟窗口
+    await until(() => g.kernel.workRunner.liveStatus('10001').active[0]?.rounds >= 2, 8000, 'A 进入第 2 轮');
+
+    // 1. 普通群友调用 work_cancel：被权限拦下，A 的任务不受影响
+    const deniedMember = String(await memberCancel!.handler({}, g.tctx('20001', 'member') as any));
+    assert.match(deniedMember, /权限不足/, `普通群友调 work_cancel 应拒绝：${deniedMember}`);
+    assert.equal(g.kernel.workRunner.liveStatus('10001').active.length, 1, '普通群友不能停掉 A 的任务');
+
+    // 2. 另一个有管理员权限的用户 B（10002）调 work_cancel（即使带上 A 的 run_id 或 all: true）也不能终止 A
+    const adminCancel = g.tools('admin').find((t) => t.name === 'work_cancel')!;
+    const bNoArgs = String(await adminCancel.handler({}, g.tctx('10002', 'admin') as any));
+    assert.match(bNoArgs, /没有.*可终止/, `B 自己没有任务，不能动 A 的活：${bNoArgs}`);
+    const bHijack = String(await adminCancel.handler({ run_id: aRunId, all: true }, g.tctx('10002', 'admin') as any));
+    assert.match(bHijack, /没有.*可终止/, `B 即使传入 A 的 run_id 也绝不能终止 A 的活：${bHijack}`);
+    assert.equal(g.kernel.workRunner.liveStatus('10001').active.length, 1, 'A 的任务必须仍在运行');
+
+    // 3. A 自己调 work_cancel：立刻 abort 并清理状态
+    const aReply = String(await adminCancel.handler({}, g.tctx('10001', 'owner') as any));
+    assert.match(aReply, /已终止.*A 的长时间任务/, `A 取消自己任务应成功：${aReply}`);
+
+    const resA = await runA;
+    offErr();
+    assert.equal(resA.ok, false, '被终止的任务决不能判成 ok: true');
+    assert.equal(resA.cancelled, true, '返回值必须标明 cancelled: true');
+    assert.match(resA.error ?? '', /终止/, `错误信息应说明已终止：${resA.error}`);
+    assert.equal(g.kernel.workRunner.liveStatus('10001').active.length, 0, 'A 活跃任务应清空');
+    assert.equal(g.kernel.workRunner.steer(chat, '10001', '还能插话吗'), false, '终止后不可再 steer');
+    assert.ok(errorEvents.some((e) => e.id === aRunId && e.result?.cancelled === true), '应发出 cancelled 标记的 workError');
+  } finally {
+    await g.cleanup();
+  }
+});
+
+test('work_cancel：只停本人目标任务不影响他人并发任务；多任务需确认，pending 可取消', async () => {
+  const g = await boot('9412');
+  g.mock.script.length = 0;
+  try {
+    const cancelTool = g.tools('owner').find((t) => t.name === 'work_cancel')!;
+    const chat = g.chat;
+    const agent = g.kernel.container.workAgent();
+    const tools = g.kernel.container.workToolsFor(chat, 'owner', agent, 0);
+
+    // 用户 A 两个并跑任务 + 用户 B 一个并跑任务
+    const callsBefore = g.mock.calls.length;
+    g.mock.script.push(
+      { delayMs: 2500, toolCalls: [{ name: 'work_finish', args: { summary: 'A1' } }] },
+      { delayMs: 2500, toolCalls: [{ name: 'work_finish', args: { summary: 'A2' } }] },
+      { delayMs: 300, toolCalls: [{ name: 'work_finish', args: { summary: 'B 正常完成' } }] },
+    );
+    const runA1 = g.kernel.workRunner.run({
+      chat, task: '整理财务报表', taskLabel: '整理财务报表', userId: '10001', nickname: 'A',
+      role: 'owner', agent, tools, trigger: 'command', depth: 0, idleRemindMs: 50,
+    });
+    const runA2 = g.kernel.workRunner.run({
+      chat, task: '导出设计图', taskLabel: '导出设计图', userId: '10001', nickname: 'A',
+      role: 'owner', agent, tools, trigger: 'command', depth: 0, idleRemindMs: 50,
+    });
+    const runB = g.kernel.workRunner.run({
+      chat, task: 'B 的独立任务', taskLabel: 'B 的独立任务', userId: '10002', nickname: 'B',
+      role: 'admin', agent, tools, trigger: 'command', depth: 0, idleRemindMs: 50,
+    });
+
+    await until(
+      () => g.kernel.workRunner.liveStatus('10001').active.length === 2
+        && g.kernel.workRunner.liveStatus('10002').active.length === 1
+        && g.mock.calls.length >= callsBefore + 3,
+      8000,
+      'A 的 2 个和 B 的 1 个任务均已进入模型调用窗口',
+    );
+
+    // 1. A 有多个任务却不传参数：提示歧义，暂不终止任何一个
+    const askWhich = String(await cancelTool.handler({}, g.tctx('10001', 'owner') as any));
+    assert.match(askWhich, /2 件正在跑的任务/, `多任务不指定时应让用户确认：${askWhich}`);
+    assert.equal(g.kernel.workRunner.liveStatus('10001').active.length, 2, '歧义时不该盲停');
+
+    // 2. A 指定 target 停「财务报表」，然后用 all: true 停剩下的（且不影响 B）
+    const stopOne = String(await cancelTool.handler({ target: '财务' }, g.tctx('10001', 'owner') as any));
+    assert.match(stopOne, /整理财务报表/, `按 target 应只停财务报表：${stopOne}`);
+    const resA1 = await runA1;
+    assert.equal(resA1.cancelled, true);
+    assert.equal(g.kernel.workRunner.liveStatus('10001').active.length, 1, '应还剩导出设计图');
+
+    const stopRest = String(await cancelTool.handler({ all: true }, g.tctx('10001', 'owner') as any));
+    assert.match(stopRest, /导出设计图/, `all:true 应停掉 A 剩余任务：${stopRest}`);
+    const resA2 = await runA2;
+    assert.equal(resA2.cancelled, true);
+
+    // 3. B 的任务完全不受 A 的 all: true 影响，必须正常成功
+    const resB = await runB;
+    assert.equal(resB.ok, true, 'A 全部取消也绝不能影响 B 的任务');
+    assert.equal(resB.cancelled, undefined);
+    assert.ok(g.mock.calls.length >= callsBefore + 3);
+
+    // 4. pending（work_ask 等待回答态）：没有正在跑的活时，work_cancel 可清掉自己的 pending，但不动别人的 pending
+    g.mock.script.push(
+      { toolCalls: [{ name: 'work_ask', args: { question: 'A 要哪种格式？' } }] },
+      { toolCalls: [{ name: 'work_ask', args: { question: 'B 要哪种格式？' } }] },
+    );
+    await g.kernel.workRunner.run({
+      chat, task: 'A 提问任务', taskLabel: 'A 提问任务', userId: '10001', nickname: 'A',
+      role: 'owner', agent, tools, trigger: 'command', depth: 0, idleRemindMs: 50,
+    });
+    await g.kernel.workRunner.run({
+      chat, task: 'B 提问任务', taskLabel: 'B 提问任务', userId: '10002', nickname: 'B',
+      role: 'admin', agent, tools, trigger: 'command', depth: 0, idleRemindMs: 50,
+    });
+    assert.ok(g.kernel.workRunner.liveStatus('10001').pending, 'A 应进入 pending');
+    assert.ok(g.kernel.workRunner.liveStatus('10002').pending, 'B 应进入 pending');
+
+    const clearPendingA = String(await cancelTool.handler({}, g.tctx('10001', 'owner') as any));
+    assert.match(clearPendingA, /等待回答/, `应清理 A 的 pending：${clearPendingA}`);
+    assert.equal(g.kernel.workRunner.liveStatus('10001').pending, undefined, 'A 的 pending 应已清除');
+    assert.ok(g.kernel.workRunner.liveStatus('10002').pending, '清理 A 的 pending 不能影响 B 的 pending');
+  } finally {
+    await g.cleanup();
+  }
+});
