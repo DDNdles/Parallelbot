@@ -179,9 +179,9 @@ npm start           # 启动内核（原生运行 TS 源码，要求 Node ≥ 24
 
 | 协议端 | 形态 | 托管支持 | 适用场景 |
 | :--- | :--- | :---: | :--- |
-| [**NapCat**](https://github.com/NapNeko/NapCatQQ) | 引导注入 QQNT | **✅ Windows 自动下载 + 守护** | **默认方案**。支持 WebUI 注入与稳定挂载。 |
-| [**LuckyLilliaBot (LLBot)**](https://github.com/LLOneBot/LuckyLilliaBot) | 有头 PMHQ 注入 QQNT | **✅ Windows 自动下载 + 看门狗守护** | 稳定性高，完美兼容真 QQ 表情与文件收发（需申请 Auth Token）。 |
-| [**SnowLuma**](https://github.com/TomyJan/SnowLuma) | Hook 注入 QQNT | **✅ Windows 镜像下载 + 守护** | 第三协议端（从社区镜像拉取 v2.4.2 并校验 SHA256）。 |
+| [**SnowLuma**](https://github.com/TomyJan/SnowLuma) | 本地拉起 QQNT + Hook 注入 | **✅ Windows 镜像下载 + 守护** | **默认方案**。从社区镜像拉取 v2.4.2 并校验 SHA256，本地独立档案拉起 QQ 实例。 |
+| [**NapCat**](https://github.com/NapNeko/NapCatQQ) | 本地拉起 QQNT + 引导注入 | **✅ Windows 自动下载 + 守护** | 备选方案。通过 `NapCatWinBootMain` 拉起并注入本机 QQNT 实例。 |
+| [**LuckyLilliaBot (LLBot)**](https://github.com/LLOneBot/LuckyLilliaBot) | 本地拉起 QQNT + PMHQ 注入 | **✅ Windows 自动下载 + 看门狗守护** | 备选方案。稳定性高，兼容真 QQ 表情与文件收发（需申请 Auth Token）。 |
 | **通用 OneBot 11** | 反向 WebSocket | — | Linux / macOS 容器化或自建协议端环境，指向 `ws://127.0.0.1:3001/onebot`。 |
 
 ### 模型兼容性（由 `@earendil-works/pi-ai` 驱动）

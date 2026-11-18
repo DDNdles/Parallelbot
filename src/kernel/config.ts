@@ -57,8 +57,8 @@ export const DEFAULT_CONFIG = {
     port: 3001,                           // 反向 WS 服务端口
     host: '127.0.0.1',
     /** 协议端（三者都只说 OneBot 11 反向 WS，接入侧无差别；差别在内核托管哪一个）。
-     *  托管常驻开启：桌面内核启动即自动下载/拉起/守护。默认 NapCat；保留 LLBot 与 SnowLuma 可随时在设置页切换。 */
-    flavor: 'napcat' as 'llbot' | 'napcat' | 'snowluma',
+     *  托管常驻开启：桌面内核启动即自动下载/拉起/守护。默认 SnowLuma；保留 NapCat 与 LLBot 可随时在设置页切换。 */
+    flavor: 'snowluma' as 'llbot' | 'napcat' | 'snowluma',
     llbot: {
       // 接入方式：'pmhq' = 有头模式（PMHQ 注入本机 QQNT）；'direct' = 无头模式（纯协议直连）。
       //           新版 LLBot/PMHQ 均需申请 Auth Token（见 https://auth.luckylillia.com 及 services/llbot.ts）
@@ -74,6 +74,7 @@ export const DEFAULT_CONFIG = {
     snowluma: {
       webuiPort: 5099,                    // SnowLuma WebUI 默认端口
       qqPath: '',                         // 本机 QQNT 路径（空 = 自动探测）
+      qqProfileDir: '',                   // bot 专用 QQ 档案目录（空 = <data>/qq-bot-profile，独立拉起本机 QQ 实例；'-' = 用本机默认档案）
     },
   },
   llm: {
@@ -374,7 +375,7 @@ export class ConfigStore {
     }
     if (this.config.onebot.snowluma && typeof this.config.onebot.snowluma === 'object') {
       for (const k of Object.keys(this.config.onebot.snowluma)) {
-        if (k !== 'webuiPort' && k !== 'qqPath') delete (this.config.onebot.snowluma as any)[k];
+        if (k !== 'webuiPort' && k !== 'qqPath' && k !== 'qqProfileDir') delete (this.config.onebot.snowluma as any)[k];
       }
     }
     this.migrateModelChains();

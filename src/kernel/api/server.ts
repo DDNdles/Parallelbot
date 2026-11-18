@@ -252,7 +252,7 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
           lastLogin: kernel.config.config.ui.lastLogin,
           expectedQq: st.expectedQq || '',
           accountBlocked: st.accountBlocked,
-          protocol: kernel.config.config.onebot.flavor ?? 'napcat',
+          protocol: kernel.config.config.onebot.flavor ?? 'snowluma',
           end,
         });
       }
@@ -1170,6 +1170,9 @@ async function handle(kernel: Kernel, uiRoot: string, req: IncomingMessage, res:
                 const cur = cfg.onebot[key] as Record<string, unknown>;
                 const p = patch as Record<string, unknown>;
                 if (typeof p.qqPath === 'string') cur.qqPath = p.qqPath.trim().slice(0, 260);
+                if ((key === 'llbot' || key === 'snowluma') && typeof p.qqProfileDir === 'string') {
+                  cur.qqProfileDir = p.qqProfileDir.trim().slice(0, 260);
+                }
                 if (key === 'llbot' && (p.mode === 'pmhq' || p.mode === 'direct')) cur.mode = p.mode;
                 if ((key === 'napcat' || key === 'snowluma') && Number.isInteger(p.webuiPort) && (p.webuiPort as number) > 0 && (p.webuiPort as number) < 65536) {
                   cur.webuiPort = p.webuiPort;

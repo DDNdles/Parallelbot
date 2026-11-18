@@ -66,6 +66,8 @@ async function reachable(origin: string): Promise<boolean> {
 export class SnowLumaManager implements ProtocolEnd {
   readonly id = 'snowluma' as const;
   private child?: ChildProcess;
+  private qqChild?: ChildProcess;
+  private qqUsed = '';
   private exitCount = 0;
   private lastExitAt = 0;
   private stopping = false;
@@ -82,12 +84,27 @@ export class SnowLumaManager implements ProtocolEnd {
     this.log = loggerFactory('snowluma-manager');
   }
 
-  private get cfg(): { webuiPort: number; qqPath?: string } {
+  private get cfg(): { webuiPort: number; qqPath?: string; qqProfileDir?: string } {
     return (this.config.config.onebot as any).snowluma ?? { webuiPort: 5099 };
+  }
+
+  /** bot 专用 QQ 档案目录（独立拉起本机 QQ 实例；'-' = 明确借用本机默认档案） */
+  qqProfileDir(): string {
+    const raw = (this.cfg.qqProfileDir || '').trim();
+    if (raw === '-') return '';
+    return raw || join(this.config.dataDir, 'qq-bot-profile');
   }
 
   running(): boolean {
     return !!this.child && !this.child.killed && this.child.exitCode === null;
+  }
+
+  qqRunning(): boolean {
+    return !!this.qqChild && !this.qqChild.killed && this.qqChild.exitCode === null;
+  }
+
+  private async resolveQQPath(): Promise<string> {
+    return findQqInstallPath(String(this.cfg.qqPath || '').trim());
   }
 
   homeDir(): string { return join(this.config.dataDir, 'snowluma'); }
@@ -106,6 +123,9 @@ export class SnowLumaManager implements ProtocolEnd {
     return {
       running: this.running(),
       pid: this.child?.pid,
+      qqPath: this.qqUsed,
+      qqPid: this.qqChild?.pid,
+      qqProfile: this.qqProfileDir() || '本机默认档案',
       home: this.homeDir(),
       webuiUrl: this.webuiUrl(),
       downloaded: this.downloaded(),
@@ -124,10 +144,10 @@ export class SnowLumaManager implements ProtocolEnd {
     out.push(this.downloaded()
       ? { state: 'pass', label: '发行包', detail: `${this.homeDir()}（${SNOWLUMA_VERSION}）` }
       : { state: 'warn', label: '发行包', detail: `未下载：${this.homeDir()}` });
-    const qq = await findQqInstallPath(String(this.cfg.qqPath || '').trim());
+    const qq = await this.resolveQQPath();
     out.push(qq
       ? { state: 'pass', label: '注入目标', detail: qq }
-      : { state: 'fail', label: '注入目标', detail: '没探到 QQNT：SnowLuma 要注入本机 QQ 客户端，装好后重启内核，或在 data/config.json 的 onebot.snowluma.qqPath 填 QQ.exe 路径' });
+      : { state: 'fail', label: '注入目标', detail: '没探到 QQNT：SnowLuma 要拉起并注入本机 QQ 客户端，装好后重启内核，或在 data/config.json 的 onebot.snowluma.qqPath 填 QQ.exe 路径' });
     out.push(this.running()
       ? { state: 'pass', label: '进程', detail: `pid=${this.child?.pid}` }
       : { state: 'fail', label: '进程', detail: this.lastError || '未运行' });
@@ -156,7 +176,7 @@ export class SnowLumaManager implements ProtocolEnd {
     if (!this.downloaded()) throw new Error('SnowLuma 解压后仍找不到 index.mjs：发行包不完整');
   }
 
-  /** 启动托管：备好目录/发行包/反向 WS 配置后拉起。幂等；不要求预填 expectedQq。 */
+  /** 启动托管：备好目录/发行包/反向 WS 配置后，拉起本机 QQ 实例与 SnowLuma 并自动注入。幂等；不要求预填 expectedQq。 */
   async start(): Promise<void> {
     if (this.running()) return;
     if (process.platform !== 'win32') {
@@ -180,11 +200,33 @@ export class SnowLumaManager implements ProtocolEnd {
       this.errors.record('error', 'adapter', this.lastError, { notifyOwner: true });
       return;
     }
+    const qq = await this.resolveQQPath();
+    if (!qq) {
+      this.lastError = '没找到本机 QQ：请在 data/config.json 的 onebot.snowluma.qqPath 填入 QQ.exe 路径（SnowLuma 要拉起并注入本机 QQNT 进程）。';
+      this.errors.record('error', 'adapter', this.lastError, { notifyOwner: true });
+      return;
+    }
+    this.qqUsed = qq;
     this.writeNetworkConfig();
-    this.spawn();
+    this.spawn(qq);
   }
 
-  private spawn(): void {
+  private spawn(qq: string): void {
+    const profile = this.qqProfileDir();
+    if (!this.qqRunning()) {
+      if (profile) mkdirSync(profile, { recursive: true });
+      const qqArgs = profile ? [`--user-data-dir=${profile}`] : [];
+      this.log.info(`拉起本机 QQ 实例: ${qq}（档案 ${profile || '本机默认'}）`);
+      const qqProc = spawn(qq, qqArgs, { windowsHide: false, stdio: 'ignore' });
+      this.qqChild = qqProc;
+      qqProc.on('exit', () => {
+        if (this.qqChild === qqProc) this.qqChild = undefined;
+      });
+      qqProc.on('error', (e) => {
+        if (this.qqChild === qqProc) this.qqChild = undefined;
+        this.log.warn(`拉起 QQ 实例失败: ${e.message}`);
+      });
+    }
     const env = {
       ...process.env,
       SNOWLUMA_WEBUI_PORT: String(this.cfg.webuiPort || 5099),
@@ -220,12 +262,30 @@ export class SnowLumaManager implements ProtocolEnd {
     this.stopping = true;
     const c = this.child;
     this.child = undefined;
-    if (!c) return;
-    await new Promise<void>((resolveP) => {
-      const t = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* ignore */ } resolveP(); }, 5000);
-      c.once('exit', () => { clearTimeout(t); resolveP(); });
-      try { c.kill(); } catch { clearTimeout(t); resolveP(); }
-    });
+    const qq = this.qqChild;
+    this.qqChild = undefined;
+    const kills: Promise<void>[] = [];
+    if (c && c.exitCode === null && !c.killed) {
+      kills.push(new Promise<void>((resolveP) => {
+        const t = setTimeout(() => { try { c.kill('SIGKILL'); } catch { /* ignore */ } resolveP(); }, 5000);
+        c.once('exit', () => { clearTimeout(t); resolveP(); });
+        try { c.kill(); } catch { clearTimeout(t); resolveP(); }
+      }));
+    }
+    if (qq && qq.exitCode === null && !qq.killed) {
+      kills.push(new Promise<void>((resolveP) => {
+        const t = setTimeout(() => { try { qq.kill('SIGKILL'); } catch { /* ignore */ } resolveP(); }, 5000);
+        qq.once('exit', () => { clearTimeout(t); resolveP(); });
+        try {
+          if (process.platform === 'win32' && qq.pid) {
+            execFile('taskkill', ['/PID', String(qq.pid), '/T', '/F'], () => { clearTimeout(t); resolveP(); });
+          } else {
+            qq.kill();
+          }
+        } catch { clearTimeout(t); resolveP(); }
+      }));
+    }
+    await Promise.all(kills);
   }
 
   /**

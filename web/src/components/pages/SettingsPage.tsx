@@ -62,7 +62,7 @@ interface Work {
 
 interface Config {
   risk: { replyRatePerMin: number; proactive: Record<string, boolean> };
-  /** 协议端由 POST /api/login/protocol 切换（napcat 默认 / llbot / snowluma）；llbot.mode 仍只认手改 config.json */
+  /** 协议端由 POST /api/login/protocol 切换（snowluma 默认 / napcat / llbot）；llbot.mode 仍只认手改 config.json */
   onebot: { host: string; port: number; reverseWsPath: string; flavor?: 'napcat' | 'llbot' | 'snowluma' };
   ui?: { expectedQq?: string; chatPreview?: boolean };
   llm: { failoverThreshold: number };
@@ -125,7 +125,7 @@ export default function SettingsPage() {
   const [checking, setChecking] = useState(false);
   const [checkedAt, setCheckedAt] = useState(0);
   const [qq, setQq] = useState('');
-  const [protocol, setProtocol] = useState<'napcat' | 'llbot' | 'snowluma'>('napcat');
+  const [protocol, setProtocol] = useState<'napcat' | 'llbot' | 'snowluma'>('snowluma');
   const [switchingProto, setSwitchingProto] = useState(false);
   const [llbotAuth, setLlbotAuth] = useState<{ supported?: boolean; hasToken?: boolean; validation?: string; message?: string; loginError?: string; pageUrl?: string; mirrorUrl?: string; qqGroup?: string } | null>(null);
   const [authInput, setAuthInput] = useState('');
@@ -387,11 +387,11 @@ export default function SettingsPage() {
                       label="协议端"
                       value={protocol}
                       options={[
-                        { v: 'napcat', t: 'NapCat（默认）' },
+                        { v: 'snowluma', t: 'SnowLuma（默认）' },
+                        { v: 'napcat', t: 'NapCat' },
                         { v: 'llbot', t: 'LuckyLillia (LLBot)' },
-                        { v: 'snowluma', t: 'SnowLuma' },
                       ]}
-                      onChange={(v) => void switchProtocol(v === 'llbot' ? 'llbot' : v === 'snowluma' ? 'snowluma' : 'napcat')}
+                      onChange={(v) => void switchProtocol(v === 'llbot' ? 'llbot' : v === 'napcat' ? 'napcat' : 'snowluma')}
                     />
                   </span>
                 </div>

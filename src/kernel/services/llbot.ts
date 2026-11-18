@@ -11,6 +11,7 @@ import type { EndCheck, Logger, ProtocolEnd } from '../types.ts';
 import { LlbotIdentity, parseLlbotLine } from './llbot-identity.ts';
 import { sha256File } from './integrity.ts';
 import { ensureFaces } from './faces.ts';
+import { findQqInstallPath } from './deps.ts';
 
 /**
  * 有头模式前置检查的判定（纯函数，便于测试）。
@@ -257,6 +258,7 @@ export class LLBotManager implements ProtocolEnd {
     if (!existsSync(this.exePath())) {
       await this.downloadAndExtract(home);
     }
+    let resolvedQq = '';
     if (this.mode() === 'pmhq') {
       const gate = await this.pmhqPreflight();
       if (gate) {
@@ -265,7 +267,8 @@ export class LLBotManager implements ProtocolEnd {
         this.errors.record('warn', 'adapter', gate);
         return;
       }
-      this.writePmhqConfig();
+      resolvedQq = await findQqInstallPath(String(this.cfg.qqPath || '').trim());
+      this.writePmhqConfig(resolvedQq);
     } else {
       // 设备身份必须先于 LLBot 落盘：它启动时就把它读进 wtlogin/签名层，之后再改只影响文件的运行内副本。
       // 仅无头模式有意义 —— 有头模式的设备身份是本机 QQ 客户端自己的，别去动它。
@@ -277,7 +280,7 @@ export class LLBotManager implements ProtocolEnd {
     this.writeWebuiToken();
     this.patchAccountConfigs(); // 重启场景：账号配置已存在则直接补丁
     this.cleanLegacyDataDir();
-    this.spawn(home);
+    this.spawn(home, resolvedQq);
   }
 
   /**
@@ -311,7 +314,7 @@ export class LLBotManager implements ProtocolEnd {
    * qq_args 里塞 --user-data-dir，让 bot 的 QQ 走自己的档案目录，不干扰用户自己在用的 QQ。
    * 已存在的配置只做 upsert，保留用户手改的其它字段。
    */
-  private writePmhqConfig(): void {
+  private writePmhqConfig(resolvedQqPath = ''): void {
     const dir = join(this.homeDir(), 'bin', 'pmhq');
     mkdirSync(dir, { recursive: true });
     const path = join(dir, 'pmhq_config.json');
@@ -319,7 +322,7 @@ export class LLBotManager implements ProtocolEnd {
     try { cfg = JSON.parse(readFileSync(path, 'utf-8')); } catch { /* 首次：用默认 */ }
     const uin = String(this.config.config.ui.expectedQq || this.config.config.ui.lastLogin?.qq || '').trim();
     const profile = this.qqProfileDir();
-    const qqPath = (this.cfg.qqPath || '').trim();
+    const qqPath = (resolvedQqPath || this.cfg.qqPath || '').trim();
     // qq_args 里我们只负责 --user-data-dir 这一段（档案隔离是本内核加的），其余手改参数原样保留；
     // 切回本机默认档案时要能把我们之前写的那段摘掉（否则残留会导致下次仍走 bot 档案）。
     const extraArgs = String(cfg.qq_args ?? '').replace(/--user-data-dir="[^"]*"\s*/g, '').trim();
@@ -615,7 +618,7 @@ export class LLBotManager implements ProtocolEnd {
     return '';
   }
 
-  private spawn(home: string): void {
+  private spawn(home: string, resolvedQqPath = ''): void {
     if (!existsSync(this.exePath())) {
       this.errors.record('error', 'adapter', `LLBot 启动中止：未找到 llbot.exe（${home}）`, { notifyOwner: true });
       return;
@@ -624,12 +627,14 @@ export class LLBotManager implements ProtocolEnd {
     // launcher（Rust）参数语法：--qq=<uin>（等号连写；-q 分离式不转发）；--pmhq 切到有头模式
     const mode = this.mode();
     const args = mode === 'pmhq' ? ['--pmhq'] : [];
+    const qqPath = (resolvedQqPath || this.cfg.qqPath || '').trim();
+    if (mode === 'pmhq' && qqPath) args.push(`--qq-path=${qqPath}`);
     if (uin) args.push(`--qq=${uin}`);
     if (mode === 'pmhq') {
       const profile = this.qqProfileDir();
       this.log.info(
         `拉起 LLBot（有头模式 PMHQ）: ${home}` +
-        `${uin ? `（自动登录 uin=${uin}）` : ''}（QQ 档案 ${profile || '本机默认'}）`,
+        `${uin ? `（自动登录 uin=${uin}）` : ''}（QQ ${qqPath || '自动探测'}，档案 ${profile || '本机默认'}）`,
       );
     } else {
       this.log.info(`拉起 LLBot（无头模式 Direct）: ${home}${uin ? `（快速登录 uin=${uin}）` : '（无已存会话，全新扫码）'}`);

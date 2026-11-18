@@ -20,22 +20,23 @@ import { qqPathFromUninstallString } from '../src/kernel/services/deps.ts';
 import { MockOneBot } from './helpers/mock-onebot.ts';
 
 /**
- * 协议端三选一（NapCat / LLBot / SnowLuma），托管常驻开启；换端走设置页那颗胶囊（POST /api/login/protocol）。
- * 默认为 NapCat；保留 LLBot 与 SnowLuma 可切换，切到 LLBot 时回传官方 Auth Token 申请页地址。
- * 预期账号（ui.expectedQq）不是启动前置：登哪个就是哪个；手填才启用账号守卫与快速登录。
+ * 协议端三选一（SnowLuma / NapCat / LLBot），托管常驻开启；换端走设置页那颗胶囊（POST /api/login/protocol）。
+ * 默认为 SnowLuma；保留 NapCat 与 LLBot 可切换，切到 LLBot 时回传官方 Auth Token 申请页地址。
+ * 三端有头均在本地拉起 QQNT 实例；预期账号（ui.expectedQq）不是启动前置：登哪个就是哪个；手填才启用账号守卫与快速登录。
  */
 const ANY = (x: unknown) => x as Record<string, unknown>;
 const clients = (cfg: Record<string, unknown>) => ANY(ANY(cfg.network)).websocketClients as Record<string, unknown>[];
 const slClients = (cfg: Record<string, unknown>) => ANY(ANY(cfg.networks)).wsClients as Record<string, unknown>[];
 
-test('默认协议端是 NapCat；三端老配置里的 managed 键与未知旧键被迁移清掉', () => {
+test('默认协议端是 SnowLuma；三端老配置里的 managed 键与未知旧键被迁移清掉', () => {
   const d = freshDefaultConfig();
-  assert.equal(d.onebot.flavor, 'napcat');
+  assert.equal(d.onebot.flavor, 'snowluma');
   assert.equal(ANY(d.onebot.llbot).managed, undefined);
   assert.equal(ANY(d.onebot.napcat).managed, undefined);
   assert.equal(ANY(d.onebot.napcat).webuiPort, 6099);
   assert.equal(ANY(d.onebot.snowluma).managed, undefined);
   assert.equal(ANY(d.onebot.snowluma).webuiPort, 5099);
+  assert.equal(ANY(d.onebot.snowluma).qqProfileDir, '');
 
   const dataDir = mkdtempSync(tmpdir() + '/pnap-cfg-');
   writeFileSync(join(dataDir, 'config.json'), JSON.stringify({
@@ -43,7 +44,7 @@ test('默认协议端是 NapCat；三端老配置里的 managed 键与未知旧�
       port: 3999,
       llbot: { managed: false, mode: 'direct', junk: 1 },
       napcat: { managed: false },
-      snowluma: { managed: true, webuiPort: 5199, qqPath: 'C:\\QQ\\QQ.exe', junk: 2 },
+      snowluma: { managed: true, webuiPort: 5199, qqPath: 'C:\\QQ\\QQ.exe', qqProfileDir: 'D:\\qq-prof', junk: 2 },
     },
   }));
   const store = new ConfigStore(dataDir, new Bus(), new ErrorCenter(new Bus(), { dataDir }));
@@ -55,6 +56,7 @@ test('默认协议端是 NapCat；三端老配置里的 managed 键与未知旧�
   assert.equal(ANY(store.config.onebot.snowluma).junk, undefined, 'SnowLuma 未知键一并清掉');
   assert.equal(ANY(store.config.onebot.snowluma).webuiPort, 5199, 'SnowLuma 有用的键保留');
   assert.equal(ANY(store.config.onebot.snowluma).qqPath, 'C:\\QQ\\QQ.exe', 'SnowLuma qqPath 保留');
+  assert.equal(ANY(store.config.onebot.snowluma).qqProfileDir, 'D:\\qq-prof', 'SnowLuma qqProfileDir 保留');
   assert.equal(ANY(store.config.onebot).port, 3999);
 });
 
@@ -178,7 +180,7 @@ test('API：换端入口（设置页胶囊）：切换落盘并停旧起新；�
     return { status: r.status, body: ANY(await r.json()) };
   };
   try {
-    assert.equal((await get('/api/login/status')).protocol, 'napcat');
+    assert.equal((await get('/api/login/status')).protocol, 'snowluma');
     // 换端入口（设置页胶囊）：停旧端→落盘→（托管内核）起新端；未知档拒绝；noApi 不该触发下载
     assert.equal((await post('/api/login/protocol', { flavor: 'bogus' })).status, 400);
     const toLlbot = await post('/api/login/protocol', { flavor: 'llbot' });
@@ -233,7 +235,7 @@ test('API：换端入口（设置页胶囊）：切换落盘并停旧起新；�
     await post('/api/config', {
       onebot: {
         napcat: { qqPath: '  D:\\QQ\\QQ.exe  ', webuiPort: 7000, managed: true },
-        snowluma: { qqPath: '  E:\\QQ\\QQ.exe  ', webuiPort: 5200, managed: true },
+        snowluma: { qqPath: '  E:\\QQ\\QQ.exe  ', qqProfileDir: '  F:\\qq-bot  ', webuiPort: 5200, managed: true },
         llbot: { mode: 'bogus' },
       },
     });
@@ -243,6 +245,7 @@ test('API：换端入口（设置页胶囊）：切换落盘并停旧起新；�
     assert.equal(nap.managed, undefined, '托管没有开关入口');
     const snow = ANY(ANY(kernel.config.config.onebot).snowluma);
     assert.equal(snow.qqPath, 'E:\\QQ\\QQ.exe');
+    assert.equal(snow.qqProfileDir, 'F:\\qq-bot');
     assert.equal(snow.webuiPort, 5200);
     assert.equal(snow.managed, undefined, '托管没有开关入口');
     assert.equal(ANY(ANY(kernel.config.config.onebot).llbot).mode, 'pmhq');
@@ -295,7 +298,7 @@ test('SnowLuma 配置合并幂等性：保留 mode/其它网络与其它客户�
   assert.equal(slClients(twice).find((c) => c.name === 'parallel')?.url, 'ws://127.0.0.1:3001/onebot');
 });
 
-test('SnowLumaManager：包布局识别、无代理二维码、check 四项返回', async () => {
+test('SnowLumaManager：包布局识别、独立 QQ 档案定位、无代理二维码、check 四项返回', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'parallel-snowluma-'));
   const db = new Db(dataDir);
   const bus = new Bus();
@@ -304,7 +307,12 @@ test('SnowLumaManager：包布局识别、无代理二维码、check 四项返�
   const m = new SnowLumaManager(config, errors, makeLogger, () => ({ connected: false, selfId: '', nickname: '' }));
   assert.equal(m.id, 'snowluma');
   assert.equal(m.running(), false);
+  assert.equal(m.qqRunning(), false);
   assert.equal(m.downloaded(), false);
+  assert.equal(m.qqProfileDir(), join(dataDir, 'qq-bot-profile'), '默认使用独立档案拉起本地 QQ 实例');
+  ANY(ANY(config.config.onebot).snowluma).qqProfileDir = '-';
+  assert.equal(m.qqProfileDir(), '', 'qqProfileDir="-" 切回本机默认档案');
+  ANY(ANY(config.config.onebot).snowluma).qqProfileDir = '';
   const home = m.homeDir();
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, 'index.mjs'), '');
