@@ -62,8 +62,8 @@ interface Work {
 
 interface Config {
   risk: { replyRatePerMin: number; proactive: Record<string, boolean> };
-  /** 协议端由 POST /api/login/protocol 切换（napcat 默认 / llbot 保留）；llbot.mode 仍只认手改 config.json */
-  onebot: { host: string; port: number; reverseWsPath: string; flavor?: 'napcat' | 'llbot' };
+  /** 协议端由 POST /api/login/protocol 切换（napcat 默认 / llbot / snowluma）；llbot.mode 仍只认手改 config.json */
+  onebot: { host: string; port: number; reverseWsPath: string; flavor?: 'napcat' | 'llbot' | 'snowluma' };
   ui?: { expectedQq?: string; chatPreview?: boolean };
   llm: { failoverThreshold: number };
   /** 每会话历史条数与上下文时间窗在 storage 段；旧内核没这个段，可选 */
@@ -125,7 +125,7 @@ export default function SettingsPage() {
   const [checking, setChecking] = useState(false);
   const [checkedAt, setCheckedAt] = useState(0);
   const [qq, setQq] = useState('');
-  const [protocol, setProtocol] = useState<'napcat' | 'llbot'>('napcat');
+  const [protocol, setProtocol] = useState<'napcat' | 'llbot' | 'snowluma'>('napcat');
   const [switchingProto, setSwitchingProto] = useState(false);
   const [llbotAuth, setLlbotAuth] = useState<{ supported?: boolean; hasToken?: boolean; validation?: string; message?: string; loginError?: string; pageUrl?: string; mirrorUrl?: string; qqGroup?: string } | null>(null);
   const [authInput, setAuthInput] = useState('');
@@ -184,7 +184,7 @@ export default function SettingsPage() {
   const refreshInfo = useCallback(async () => {
     try {
       const st = await get('/api/login/status') as { protocol?: string; end?: EndStatus };
-      if (st.protocol === 'llbot' || st.protocol === 'napcat') setProtocol(st.protocol);
+      if (st.protocol === 'llbot' || st.protocol === 'napcat' || st.protocol === 'snowluma') setProtocol(st.protocol);
       if (st.end) setEnd(st.end);
     } catch { setEnd(null); }
   }, []);
@@ -210,8 +210,8 @@ export default function SettingsPage() {
     }
   }, []);
 
-  /** 换协议端：默认 NapCat，保留 LLBot；切去 LLBot 时同步弹出官方 Auth Token 申请网页 */
-  const switchProtocol = useCallback(async (next: 'napcat' | 'llbot') => {
+  /** 换协议端：默认 NapCat，保留 LLBot 与 SnowLuma；切去 LLBot 时同步弹出官方 Auth Token 申请网页 */
+  const switchProtocol = useCallback(async (next: 'napcat' | 'llbot' | 'snowluma') => {
     if (next === protocol || switchingProto) return;
     if (next === 'llbot') {
       const url = llbotAuth?.pageUrl || 'https://auth.luckylillia.com';
@@ -221,7 +221,7 @@ export default function SettingsPage() {
     try {
       const r = await post('/api/login/protocol', { flavor: next }) as {
         ok?: boolean;
-        protocol?: 'napcat' | 'llbot';
+        protocol?: 'napcat' | 'llbot' | 'snowluma';
         authUrl?: string;
         auth?: { hasToken?: boolean; validation?: string; message?: string; loginError?: string; pageUrl?: string; mirrorUrl?: string; qqGroup?: string };
       };
@@ -263,7 +263,7 @@ export default function SettingsPage() {
   const loadCfg = useCallback(async () => {
     const cfg: Config = await get('/api/config');
     setC(cfg);
-    if (cfg.onebot?.flavor === 'llbot' || cfg.onebot?.flavor === 'napcat') setProtocol(cfg.onebot.flavor);
+    if (cfg.onebot?.flavor === 'llbot' || cfg.onebot?.flavor === 'napcat' || cfg.onebot?.flavor === 'snowluma') setProtocol(cfg.onebot.flavor);
     setQq(cfg.ui?.expectedQq ?? '');
     void refreshInfo();
     void loadAuth();
@@ -389,8 +389,9 @@ export default function SettingsPage() {
                       options={[
                         { v: 'napcat', t: 'NapCat（默认）' },
                         { v: 'llbot', t: 'LuckyLillia (LLBot)' },
+                        { v: 'snowluma', t: 'SnowLuma' },
                       ]}
-                      onChange={(v) => void switchProtocol(v === 'llbot' ? 'llbot' : 'napcat')}
+                      onChange={(v) => void switchProtocol(v === 'llbot' ? 'llbot' : v === 'snowluma' ? 'snowluma' : 'napcat')}
                     />
                   </span>
                 </div>

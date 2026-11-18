@@ -18,8 +18,9 @@ AGPL 对你的实际影响：自己用、改了自己用不需要做任何事；
 
 | 组件 | 许可 | 说明 |
 |---|---|---|
-| LLBot / LuckyLilliaBot | GPL-2.0 | 默认协议端；内核按需从 [官方 Releases](https://github.com/LLOneBot/LuckyLilliaBot/releases) 下载发行包到本机 `data/` |
-| NapCat | 自定义（见其仓库） | 备选协议端；同上，从 [官方 Releases](https://github.com/NapNeko/NapCatQQ/releases) 下载 |
+| LLBot / LuckyLilliaBot | GPL-2.0 | 备选协议端；内核按需从 [官方 Releases](https://github.com/LLOneBot/LuckyLilliaBot/releases) 下载发行包到本机 `data/` |
+| NapCat | 自定义（见其仓库） | 默认协议端；同上，从 [官方 Releases](https://github.com/NapNeko/NapCatQQ/releases) 下载 |
+| SnowLuma | 自定义（见其归档镜像） | 第三协议端；同上，从社区归档镜像 [Releases](https://github.com/TomyJan/SnowLuma/releases)（v2.4.2）下载并校验 SHA256 |
 
 ## 运行时依赖（随发布包）
 

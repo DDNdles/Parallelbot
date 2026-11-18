@@ -243,9 +243,12 @@ async function installEnd(ctx: InstallerCtx, step: InstallStep, clock: { now: ()
   step.state = 'waiting';
   step.detail = '正在解包…';
   const it = await waitProbe(ctx, 'llbot', 90_000, clock.sleep);
-  const missMsg = ctx.probeCtx().endFlavor === 'napcat'
+  const flavor = ctx.probeCtx().endFlavor;
+  const missMsg = flavor === 'napcat'
     ? '发行包解包后仍找不到 NapCat 引导程序'
-    : '发行包解包后仍找不到 llbot.exe';
+    : flavor === 'snowluma'
+      ? '发行包解包后仍找不到 SnowLuma 入口（index.mjs / node.exe）'
+      : '发行包解包后仍找不到 llbot.exe';
   settle(step, it, missMsg);
 }
 

@@ -86,6 +86,18 @@ test('依赖探测：每项都带名称/状态，缺失项必须给出下载或�
   assert.equal(nc.state, 'ok');
   assert.equal(nc.detail, '已就位（data/napcat）', '详情里的目录不能还写 data/llbot');
   assert.match(String(nc.download), /NapNeko\/NapCatQQ/, '官网链接指向该档自己的 releases');
+
+  // 切成 SnowLuma 那一档：名字、落点目录、镜像 releases 链接都要跟着换
+  invalidateDepCache();
+  const snow = await probeDeps({
+    dataDir: mkdtempSync(join(tmpdir(), 'parallel-deps4-')),
+    headed: true, endFlavor: 'snowluma', endDownloaded: true, endConnected: false, qqPathCfg: '',
+  }, true);
+  const sl = snow.find((i) => i.id === 'llbot')!;
+  assert.equal(sl.label, 'SnowLuma');
+  assert.equal(sl.state, 'ok');
+  assert.equal(sl.detail, '已就位（data/snowluma）');
+  assert.match(String(sl.download), /TomyJan\/SnowLuma/, '官网链接指向 SnowLuma 社区镜像 releases');
 });
 
 test('代下载只认白名单：不在表里的 id 一律拒绝，绝不拿前端传来的 URL 去 fetch', () => {

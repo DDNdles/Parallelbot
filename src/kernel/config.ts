@@ -56,9 +56,9 @@ export const DEFAULT_CONFIG = {
     reverseWsPath: '/onebot',             // 协议端反向 WS 上报地址
     port: 3001,                           // 反向 WS 服务端口
     host: '127.0.0.1',
-    /** 协议端（两者都只说 OneBot 11 反向 WS，接入侧无差别；差别在内核托管哪一个）。
-     *  托管常驻开启：桌面内核启动即自动下载/拉起/守护。默认 NapCat；保留 LLBot 可随时在设置页切换（需 Auth Token）。 */
-    flavor: 'napcat' as 'llbot' | 'napcat',
+    /** 协议端（三者都只说 OneBot 11 反向 WS，接入侧无差别；差别在内核托管哪一个）。
+     *  托管常驻开启：桌面内核启动即自动下载/拉起/守护。默认 NapCat；保留 LLBot 与 SnowLuma 可随时在设置页切换。 */
+    flavor: 'napcat' as 'llbot' | 'napcat' | 'snowluma',
     llbot: {
       // 接入方式：'pmhq' = 有头模式（PMHQ 注入本机 QQNT）；'direct' = 无头模式（纯协议直连）。
       //           新版 LLBot/PMHQ 均需申请 Auth Token（见 https://auth.luckylillia.com 及 services/llbot.ts）
@@ -70,6 +70,10 @@ export const DEFAULT_CONFIG = {
     napcat: {
       webuiPort: 6099,                    // NapCat WebUI 默认端口（登录页与控制台都在这）
       qqPath: '',                         // 本机 QQNT 路径（空 = 自动探测：注册表 → 常见安装位置）
+    },
+    snowluma: {
+      webuiPort: 5099,                    // SnowLuma WebUI 默认端口
+      qqPath: '',                         // 本机 QQNT 路径（空 = 自动探测）
     },
   },
   llm: {
@@ -358,18 +362,19 @@ export class ConfigStore {
     this.secrets = { ...defaultSecrets(), ...readJson<Partial<Secrets>>(this.secretsFile, {}) };
     this.secrets.providerKeys = this.secrets.providerKeys ?? {};
     this.secrets.pluginSecrets = this.secrets.pluginSecrets ?? {};
-    // 迁移：SnowLuma 接入已移除（2026-11-01 短暂接入当日即拆，配置块整个清掉）；协议端托管改为常驻，
-    // 两端配置里的 managed 键一并清掉
-    if ((this.config.onebot as any).snowluma) {
-      delete (this.config.onebot as any).snowluma;
-    }
-    for (const end of ['llbot', 'napcat'] as const) {
+    // 迁移：协议端托管改为常驻，三端配置里的 managed 键一并清掉；未知旧键一并清理
+    for (const end of ['llbot', 'napcat', 'snowluma'] as const) {
       const block = (this.config.onebot as any)[end];
       if (block && typeof block === 'object') delete block.managed;
     }
     if (this.config.onebot.llbot && typeof this.config.onebot.llbot === 'object') {
       for (const k of Object.keys(this.config.onebot.llbot)) {
         if (k !== 'webuiPort' && k !== 'mode' && k !== 'qqPath' && k !== 'qqProfileDir') delete (this.config.onebot.llbot as any)[k];
+      }
+    }
+    if (this.config.onebot.snowluma && typeof this.config.onebot.snowluma === 'object') {
+      for (const k of Object.keys(this.config.onebot.snowluma)) {
+        if (k !== 'webuiPort' && k !== 'qqPath') delete (this.config.onebot.snowluma as any)[k];
       }
     }
     this.migrateModelChains();
